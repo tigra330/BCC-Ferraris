@@ -1,0 +1,15 @@
+# 4-MB-Flash mit zwei OTA-App-Bereichen (Firmware-Update ueber die Webseite).
+# NVS bleibt an derselben Stelle wie in ferraris-pio (0x9000, 0x6000), damit
+# WLAN-Daten und Einstellungen den Umstieg und jedes Re-Flash ueberleben.
+# otadata (welcher App-Slot startet) liegt hinter phy_init; der Arduino-Core
+# flasht boot_app0.bin dorthin (board_upload.arduino.boot_app0 in platformio.ini),
+# damit nach einem USB-Upload sicher wieder app0 startet.
+# coredump: der Arduino-Core schreibt Abstuerze dorthin
+# (auslesen: esptool read-flash 0x3E0000 0x10000). 0x3F0000..0x400000 frei.
+# Name,     Type, SubType, Offset,   Size, Flags
+nvs,        data, nvs,     0x9000,   0x6000,
+phy_init,   data, phy,     0xf000,   0x1000,
+otadata,    data, ota,     0x10000,  0x2000,
+app0,       app,  ota_0,   0x20000,  0x1E0000,
+app1,       app,  ota_1,   0x200000, 0x1E0000,
+coredump,   data, coredump,0x3E0000, 0x10000,
