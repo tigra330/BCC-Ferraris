@@ -205,6 +205,27 @@ pio test -e native          # Unit-Tests auf dem PC
 python3 tools/web_preview.py   # Webseiten ohne Hardware: http://localhost:8080/
 ```
 
+### Versionen und Releases
+
+Die Firmware-Version kommt automatisch aus Git (`git describe`): auf einem Tag z. B. `2.2.0`,
+danach `2.2.0-3-g1a2b3c4`, mit nicht committeten Änderungen zusätzlich `-dirty`. Sie steht im
+Dashboard, auf `/config`, im JSON/MQTT und in der Konsole.
+
+Neues Release (Meilenstein):
+
+```sh
+# Fallback-Version in src/main.cpp anpassen, committen, dann:
+git tag -a V2.3.0 -m "Kurzbeschreibung"
+git push origin main V2.3.0
+pio run
+```
+
+Auf GitHub unter **Releases → Draft a new release** den Tag wählen und aus `.pio/build/esp32/`
+anhängen: `firmware.bin` (OTA-Update über `/config`), `firmware.factory.bin` (erstes Flashen
+per USB) und `firmware.elf` (nötig, um Absturzberichte dieser Version auszuwerten).
+Zurück zu einer alten Version: deren `firmware.bin` aus dem Release per OTA einspielen, oder
+`git checkout V2.2.0 && pio run`.
+
 `pio` liegt unter `~/.platformio/penv/bin/pio`. Werkseinstellungen und Schalter stehen in
 `include/ferraris_config.h`, Standard-WLAN und -MQTT optional in `include/secrets.h` (Vorlage
 `secrets.example.h`, nicht im Git). Architektur, Datenfluss und Konventionen beschreibt

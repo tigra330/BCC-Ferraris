@@ -67,6 +67,13 @@ Zeiten: `FERRARIS_OTA_VERIFY_MIN/STABLE/TIMEOUT_MS`. Ein USB-Upload (boot_app0) 
 - Coredump (ELF im Flash): Existenz beim Start gecacht, Zusammenfassung (Task, PC, Panic-Grund)
   auf `/config`, Download/Löschen per API.
 
+**Version** (`tools/pio_version.py`, post-Skript): `FERRARIS_FW_VERSION` = `git describe --tags
+--dirty` ohne „v“ (`2.2.0`, `2.2.0-3-g1a2b3c4`, `…-dirty`), nur für `projenv` (sonst baut jeder
+Commit das Framework neu). Fallback ohne Git in `src/main.cpp` — beim Release mitziehen.
+Release: Fallback anpassen, committen, `git tag -a VX.Y.Z` (Schreibweise wie `V2.1.0`), pushen, auf GitHub ein Release zum Tag
+mit `firmware.bin` (OTA), `firmware.factory.bin` (USB, leeres Board) und `firmware.elf`
+(Coredump-Auswertung) anlegen.
+
 **Ein Adapter:** Geflasht und überwacht wird über den USB-Seriell-Adapter des Boards (Auto-Reset
 per DTR/RTS, Port automatisch). Den GPIO2-Break-Workaround mit zweitem Dongle (Env `box`) aus
 `ferraris-pio` gibt es hier bewusst nicht mehr.

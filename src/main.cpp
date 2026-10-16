@@ -41,7 +41,11 @@
 #include "schmitt_trigger_autotune.h"
 #include "schmitt_trigger_logic.h"
 
-#define FERRARIS_FW_VERSION "2.1.0"   // 2.1: /config, einstellbare Eingaenge, OTA
+// Normalerweise aus Git (tools/pio_version.py: git describe), dies ist der
+// Fallback ohne Git. Beim Taggen eines Releases mit anpassen.
+#ifndef FERRARIS_FW_VERSION
+#define FERRARIS_FW_VERSION "2.2.0"
+#endif
 
 static const char *TAG = "ferraris";
 
