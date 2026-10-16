@@ -10,6 +10,8 @@
 struct ferraris_data {
     volatile int32_t  quad_forward;   // Single-Writer, 32-bit atomar
     volatile int32_t  quad_backward;
+    volatile int32_t  base_forward;    // Writer: loop()-Task (set_quad), Wert = quad + base
+    volatile int32_t  base_backward;
     ferraris_power_t  power;
     volatile int32_t  revolutions_per_kwh;   // Writer: loop()-Task (/config)
 };
@@ -42,8 +44,15 @@ void ferraris_data_add_quad(ferraris_data_t *data, int8_t direction, uint32_t no
 
 void ferraris_data_get_quad(const ferraris_data_t *data, int32_t *forward, int32_t *backward)
 {
-    if (forward)  *forward  = data ? data->quad_forward  : 0;
-    if (backward) *backward = data ? data->quad_backward : 0;
+    if (forward)  *forward  = data ? data->quad_forward  + data->base_forward  : 0;
+    if (backward) *backward = data ? data->quad_backward + data->base_backward : 0;
+}
+
+void ferraris_data_set_quad(ferraris_data_t *data, int32_t forward, int32_t backward)
+{
+    if (!data) return;
+    data->base_forward  = forward  - data->quad_forward;
+    data->base_backward = backward - data->quad_backward;
 }
 
 static float steps_to_kwh(const ferraris_data_t *data, int32_t steps)
@@ -61,12 +70,18 @@ float ferraris_data_get_energy_kwh(const ferraris_data_t *data)
 
 float ferraris_data_get_import_kwh(const ferraris_data_t *data)
 {
-    return data ? steps_to_kwh(data, data->quad_forward) : 0.0f;
+    if (!data) return 0.0f;
+    int32_t fwd;
+    ferraris_data_get_quad(data, &fwd, NULL);
+    return steps_to_kwh(data, fwd);
 }
 
 float ferraris_data_get_export_kwh(const ferraris_data_t *data)
 {
-    return data ? steps_to_kwh(data, data->quad_backward) : 0.0f;
+    if (!data) return 0.0f;
+    int32_t bwd;
+    ferraris_data_get_quad(data, NULL, &bwd);
+    return steps_to_kwh(data, bwd);
 }
 
 float ferraris_data_get_power_watts(const ferraris_data_t *data, uint32_t now_ms)

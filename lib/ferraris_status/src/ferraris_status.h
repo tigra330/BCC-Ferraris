@@ -8,7 +8,7 @@
  * JSON (Beispiel, eine Zeile):
  *   {"uptime_s":12,"counting":true,
  *    "meter":{"k":150,"steps_import":8,"steps_export":0,"import_kwh":0.0133,
- *             "export_kwh":0.0000,"net_kwh":0.0133,"power_w":412.3},
+ *             "export_kwh":0.0000,"net_kwh":0.0133,"power_w":412.3,"saved_s":42},
  *    "schmitt":{"high":3450,"low":3300},"count_pair":["Q1","Q2"],
  *    "sensors":[{"name":"Q1","gpio":36,"raw":2790,"min":2601,"max":3690,"hw":"OK",
  *                "high":3450,"low":3300},...],
@@ -59,6 +59,7 @@ typedef struct {
     float    export_kwh;
     float    net_kwh;
     float    power_w;               /**< + Bezug, - Einspeisung */
+    int32_t  saved_age_s;           /**< Zaehlerstand zuletzt gespeichert vor s, -1 = noch nie */
 
     int      threshold_high;        /**< Kanal A (aeltere Clients), je Eingang: sensors[].high */
     int      threshold_low;

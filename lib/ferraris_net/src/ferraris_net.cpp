@@ -510,6 +510,8 @@ static void handle_config_get()
     out += s_cfg.settings->restart_pending() ? "true" : "false";
     out += ",\"autotune\":";
     out += s_cfg.settings->autotune ? "true" : "false";
+    out += ",\"counter_persist\":";
+    out += s_cfg.counter_persist ? "true" : "false";
     out += ",\"max_sensors\":";
     out += FERRARIS_SETTINGS_MAX_SENSORS;
     out += ",\"min_sensors\":";
@@ -615,6 +617,18 @@ static void handle_restart()
     if (!admin_write_ok()) return;
     send_json(200, "{\"ok\":true}");
     schedule_restart(FERRARIS_RESTART_USER, "auf Anforderung der Webseite");
+}
+
+static void handle_counter_reset()
+{
+    if (!admin_write_ok()) return;
+    const char *why = nullptr;
+    if (!s_cfg.counter_reset_fn(&why)) {
+        config_error(500, why ? why : "Zuruecksetzen fehlgeschlagen", nullptr);
+        return;
+    }
+    console_note("Zaehlerstand auf 0 gesetzt (Webseite)");
+    send_json(200, "{\"ok\":true}");
 }
 
 static void ota_fail(const String &why)
@@ -887,6 +901,9 @@ void ferraris_net_begin(const ferraris_net_config_t *cfg,
         s_server->on("/api/config", HTTP_GET, handle_config_get);
         s_server->on("/api/config", HTTP_POST, handle_config_save);
         s_server->on("/api/restart", HTTP_POST, handle_restart);
+        if (s_cfg.counter_reset_fn) {
+            s_server->on("/api/counter/reset", HTTP_POST, handle_counter_reset);
+        }
         s_server->on("/api/ota", HTTP_POST, handle_ota_done, handle_ota_upload);
         s_server->on("/api/coredump", HTTP_GET, handle_coredump_get);
         s_server->on("/api/coredump/delete", HTTP_POST, handle_coredump_delete);
@@ -922,7 +939,7 @@ void ferraris_net_loop(void)
 {
     if (!s_server) return;
     if (s_restart_pending && (int32_t)(millis() - s_restart_at) >= 0) {
-        ESP.restart();
+        ferraris_sysmon_restart();   // sichert vorher den Zaehlerstand
     }
     wifi_step();
     if (s_ap_on) s_dns.processNextRequest();

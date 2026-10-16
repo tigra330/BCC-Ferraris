@@ -47,13 +47,24 @@ void ferraris_data_add_quad(ferraris_data_t *data, int8_t direction, uint32_t no
 /** Quadratur-Schritte lesen (4 Schritte = 1 Umdrehung). */
 void ferraris_data_get_quad(const ferraris_data_t *data, int32_t *forward, int32_t *backward);
 
-/** Netto-Energie seit Start in kWh (Bezug - Einspeisung). */
+/**
+ * @brief Zaehlerstand setzen: gespeicherten Stand nach dem Start uebernehmen
+ *        oder zuruecksetzen (0, 0). Nicht aus dem Hotpath aufrufen.
+ *
+ * Die Hotpath-Zaehler bleiben unangetastet; gesetzt wird ein Basiswert
+ * (Wert = Hotpath-Zaehler + Basis), den nur der Aufrufer schreibt. Ein
+ * gleichzeitiger Schritt im DMA-Callback geht dabei nicht verloren. Leser
+ * koennen waehrend des Setzens einmal einen Mischwert sehen (zwei 32-bit-Felder).
+ */
+void ferraris_data_set_quad(ferraris_data_t *data, int32_t forward, int32_t backward);
+
+/** Netto-Energie in kWh (Bezug - Einspeisung). */
 float ferraris_data_get_energy_kwh(const ferraris_data_t *data);
 
-/** Bezug seit Start in kWh. */
+/** Bezug in kWh. */
 float ferraris_data_get_import_kwh(const ferraris_data_t *data);
 
-/** Einspeisung seit Start in kWh. */
+/** Einspeisung in kWh. */
 float ferraris_data_get_export_kwh(const ferraris_data_t *data);
 
 /** Momentanleistung in W (+ Bezug, - Einspeisung, 0 = unbekannt/Stillstand). */

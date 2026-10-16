@@ -35,6 +35,10 @@ typedef struct {
     uint32_t ota_min_ms;           /**< OTA: fruehestens bestaetigen */
     uint32_t ota_stable_ms;        /**< OTA: so lange ununterbrochen gesund */
     uint32_t ota_timeout_ms;       /**< OTA: nicht gesund bis dahin -> Rollback */
+    /** Optional: vor geplanten Neustarts (ferraris_sysmon_restart, Rollback) im
+     *  loop()-Task aufgerufen, z. B. Zaehlerstand sichern. Nicht beim
+     *  Loop-Watchdog: loop() haengt dann womoeglich mitten in einem Flash-Zugriff. */
+    void   (*before_restart)(void);
 } ferraris_sysmon_config_t;
 
 /** Gewollte Neustarts: Grund wird ueber den Reset gerettet (RTC-RAM). */
@@ -83,6 +87,9 @@ void ferraris_sysmon_feed(void);
 
 /** Grund fuer den naechsten Neustart merken (vor esp_restart). */
 void ferraris_sysmon_set_restart_cause(ferraris_restart_cause_t cause);
+
+/** Geplanter Neustart (loop()-Task): before_restart, Konsole leeren, esp_restart. */
+void ferraris_sysmon_restart(void);
 
 void ferraris_sysmon_get_info(ferraris_sysmon_info_t *out);
 

@@ -20,6 +20,7 @@ from urllib.parse import parse_qs
 
 HEADER = Path(__file__).resolve().parent.parent / "lib/ferraris_net/src/ferraris_web_pages.h"
 START = time.time()
+START0 = START   # Zaehlerstand ueberlebt simulierte Neustarts
 WIFI = {"ssid": "Heimnetz", "connected": True}
 COREDUMP = {"present": True}
 # Einmessung: laeuft in der Vorschau 8 s, Ergebnis = Auswertung einer echten Aufzeichnung (3 Sensoren)
@@ -67,14 +68,19 @@ def power(t):
     return 450 + 250 * math.sin(t / 300) + random.uniform(-20, 20)
 
 
+COUNTER = {"base": 0}   # Zuruecksetzen: Schritte bis dahin abziehen
+
+
 def status():
     up = int(time.time() - START) + 7200
-    steps = 640 + up // 30
+    steps = 640 + int(time.time() - START0) // 30 - COUNTER["base"]
+    exp = 0 if COUNTER["base"] else 4
     return {
         "uptime_s": up, "counting": True,
-        "meter": {"k": SETTINGS["k"], "steps_import": steps, "steps_export": 4,
-                  "import_kwh": steps / 600, "export_kwh": 4 / 600,
-                  "net_kwh": (steps - 4) / 600, "power_w": round(power(time.time()), 1)},
+        "meter": {"k": SETTINGS["k"], "steps_import": steps, "steps_export": exp,
+                  "import_kwh": steps / 600, "export_kwh": exp / 600,
+                  "net_kwh": (steps - exp) / 600, "power_w": round(power(time.time()), 1),
+                  "saved_s": int(time.time() - START0) % 300},
         "schmitt": {"high": SETTINGS["high"][BOOT["count_a"] - 1], "low": SETTINGS["low"][BOOT["count_a"] - 1]},
         "count_pair": [f"Q{BOOT['count_a']}", f"Q{BOOT['count_b']}"],
         "sensors": [
@@ -123,7 +129,7 @@ class Handler(BaseHTTPRequestHandler):
             pending = any(SETTINGS[f] != BOOT[f] for f in RESTART_FIELDS) or SETTINGS.get("_pw_changed", False)
             return self._send(200, json.dumps({"settings": {k: v for k, v in SETTINGS.items() if k[0] != "_"},
                                                "defaults": DEFAULTS, "restart_pending": pending,
-                                               "autotune": False, "max_sensors": 8, "min_sensors": 2,
+                                               "autotune": False, "counter_persist": True, "max_sensors": 8, "min_sensors": 2,
                                                "firmware": {"version": "2.1.0", "partition": "app0",
                                                             "ota_max": 0x1E0000, "ota_state": "pruefung",
                                                             "ota_left_s": 200, "safe_mode": False,
@@ -229,6 +235,9 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/api/calib/stop":
             f = {k: v[0] for k, v in parse_qs(raw.decode()).items()}
             CALIB["state"] = "idle" if f.get("mode") == "cancel" else "done"
+            return self._send(200, json.dumps({"ok": True}))
+        if self.path == "/api/counter/reset":
+            COUNTER["base"] = 640 + int(time.time() - START0) // 30
             return self._send(200, json.dumps({"ok": True}))
         if self.path == "/api/coredump/delete":
             COREDUMP["present"] = False

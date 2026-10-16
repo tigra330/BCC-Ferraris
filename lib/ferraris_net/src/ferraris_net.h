@@ -25,12 +25,13 @@
  *   POST /api/wifi      ssid, password -> NVS speichern + verbinden      (*)
  *   GET  /config        Einstellungen                                   (*)
  *   GET  /api/config    {"settings":{...},"defaults":{...},"restart_pending":bool,
- *                        "autotune":bool,"max_sensors":8,"min_sensors":2,
+ *                        "autotune":bool,"counter_persist":bool,"max_sensors":8,"min_sensors":2,
  *                        "firmware":{"version","partition","ota_max","ota_state",
  *                                    "ota_left_s","safe_mode","coredump":{...}}}
  *                       (ohne Passwoerter)                               (*)
  *   POST /api/config    Formularfelder wie ferraris_settings_set_field   (*)(**)
- *   POST /api/restart   Neustart nach ~0,5 s                             (*)(**)
+ *   POST /api/restart   Neustart nach ~0,5 s (Zaehlerstand wird gesichert) (*)(**)
+ *   POST /api/counter/reset  Zaehlerstand auf 0 setzen und speichern      (*)(**)
  *   POST /api/ota       Firmware-Update: multipart, Feld "firmware" = firmware.bin;
  *                       schreibt in den freien OTA-Slot, dann Neustart     (*)(**)
  *   GET  /api/coredump  Absturzbericht (Rohformat) herunterladen          (*)
@@ -107,6 +108,10 @@ typedef struct {
     const ferraris_settings_ops_t *settings;
     /** Optional: automatisches Einmessen (NULL = aus). */
     const ferraris_calib_ops_t    *calib;
+    /** Optional: Zaehlerstand zuruecksetzen (NULL = Endpunkt aus).
+     *  why: Fehlermeldung bei false. */
+    bool      (*counter_reset_fn)(const char **why);
+    bool        counter_persist;     /**< Zaehlerstand wird im NVS gesichert (nur Anzeige) */
 } ferraris_net_config_t;
 
 /** Fuellt einen Status-Snapshot (WLAN-/AP-Felder ergaenzt ferraris_net selbst). */

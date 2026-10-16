@@ -11,8 +11,8 @@ die Konsole (Text oder RML-CSV) und über **WLAN** (Dashboard + JSON, optional M
 startet ein **Einrichtungs-Access-Point**, über den die WLAN-Zugangsdaten im Browser gesetzt werden.
 
 Umfang gegenüber `ferraris-pio`: Phase 1 (ADC/DMA, Schmitt, Quadratur) + CSV-Logger + WLAN.
-**Nicht portiert:** Kamera/CNN (Phase 2), D0-Ausgabe (Phase 3), `ferraris_persist`,
-`ferraris_autocal`, Oneshot-Poll-Pfad. Bei Bedarf aus `ferraris-pio` übernehmen.
+**Nicht portiert:** Kamera/CNN (Phase 2), D0-Ausgabe (Phase 3), `ferraris_autocal`,
+Oneshot-Poll-Pfad. Statt `ferraris_persist` gibt es das einfachere `ferraris_counter_store`. Bei Bedarf aus `ferraris-pio` übernehmen.
 
 ## Build & Toolchain
 
@@ -64,6 +64,10 @@ Zeiten: `FERRARIS_OTA_VERIFY_MIN/STABLE/TIMEOUT_MS`. Ein USB-Upload (boot_app0) 
 - **Loop-Watchdog**: Task `loop_wdt` (Prio 2) startet neu, wenn `loop()` `FERRARIS_LOOP_WATCHDOG_MS`
   (30 s) keinen Herzschlag liefert. Lange Blocker müssen `ferraris_sysmon_feed()` rufen
   (OTA-Upload, Coredump-Download). Der Task-WDT des Cores überwacht nur Idle CPU0.
+- **Zählerstand sichern**: `counter_loop()` speichert alle `FERRARIS_COUNTER_SAVE_INTERVAL_MS`
+  (5 min), aber nur bei Änderung; `before_restart`-Hook in `ferraris_sysmon_config_t` sichert vor
+  Webseiten-/OTA-Neustart und Rollback (nicht beim Loop-Watchdog: loop() hängt evtl. in einem
+  Flash-Zugriff → NVS-Sperre). Ein- und Ausschalten per `FERRARIS_COUNTER_PERSIST_ENABLE`.
 - Coredump (ELF im Flash): Existenz beim Start gecacht, Zusammenfassung (Task, PC, Panic-Grund)
   auf `/config`, Download/Löschen per API.
 
@@ -133,7 +137,8 @@ ferraris_data ──► print_task (Text) | log_task (CSV) | loop(): HTTP + MQTT
 
 1. Einstellungen laden (Defaults + NVS `ferrcfg`), Boot-Konfiguration ausgeben (Firmware,
    Arduino/IDF, Chip, Flash, PSRAM, k, Pins, Schwellen, WLAN).
-2. `ferraris_data_create(k)`, `quad_decoder_create()`, `ferraris_logger_create()`.
+2. `ferraris_data_create(k)`, `quad_decoder_create()`, `ferraris_logger_create()`, gespeicherten
+   Zählerstand laden (`counter_restore`, Konsole `# Zaehlerstand geladen: …`).
 3. Q-Pins auf ADC1-Kanäle abbilden, Duplikate prüfen (`static_assert` für die Default-Makros;
    Anzahl `s_n_sensors`, Pins `s_sensor_pins` und Zählpaar `s_idx_a/b` kommen aus den
    Einstellungen und sind ab dem Start fest).
@@ -145,7 +150,7 @@ ferraris_data ──► print_task (Text) | log_task (CSV) | loop(): HTTP + MQTT
    `s_counting = true`; `print_task` (nur ohne CSV-Log).
 8. Bei CSV-Log: Log-Level auf ERROR (`ferraris_log` und `esp_log`), `log_task` starten.
 
-`loop()` ruft `adc_watchdog()`, `ferraris_net_loop()` und `ferraris_sysmon_loop(gesund)`, dann
+`loop()` ruft `adc_watchdog()`, `calib_loop()`, `counter_loop()`, `ferraris_net_loop()` und `ferraris_sysmon_loop(gesund)`, dann
 `delay(5)` (beim ersten Durchlauf `ferraris_sysmon_start()`). Die **ADC-Überwachung**
 misst die Sample-Sets/s (Status-JSON `adc.sets_per_s`, Webseiten-Fußzeile) und startet den Sampler
 neu, wenn `FERRARIS_ADC_STALL_MS` (3 s) lang keine Sets kommen (Meldung `# ADC-Abtastung liefert
@@ -168,7 +173,8 @@ Grundregel: **Handle-basierte APIs** (`x_create()` / `x_destroy()`, opake Struct
 | `schmitt_logic` | pure C | `schmitt_trigger_logic` (Hysterese, `set_thresholds` erhält Zustand), `schmitt_trigger_autotune` (64-Bin-Histogramm, zwei Peaks, Schwellen im Tal), `autotune_collector` (dauerbasiert bis beide Populationen sichtbar). Unverändert. |
 | `ferraris_logger_logic` | pure C | Tracker je Kanal: EMA (α=0.12), asymmetrische Hülle (0.002 / 1e-6, Mindestspanne 300), Markenzähler; eigene Quadratur fürs W-Feld. Unverändert, identisch im Simulator. |
 | `ferraris_power` | pure C | **Neu.** Momentanleistung aus dem Abstand Schritt n ↔ n−4 (= genau eine Umdrehung, auch bei ungleichmäßigen Schritten): `P = 3.6e9 / (k · T_ms)`. Ohne neuen Schritt fällt die Anzeige als obere Schranke ab; Richtungswechsel setzt zurück. |
-| `ferraris_data` | pure C | Zähler (Single-Writer, 32-bit atomar), `import/export/energy_kwh`, `get_power_watts(now_ms)` (Timeout 1 h). Ohne Kameraziffern → jetzt PC-testbar. |
+| `ferraris_data` | pure C | Zähler (Single-Writer, 32-bit atomar), `import/export/energy_kwh`, `get_power_watts(now_ms)` (Timeout 1 h). `set_quad(fwd, bwd)` (Laden/Zurücksetzen, loop()-Task) setzt nur einen Basiswert — die Hotpath-Zähler bleiben unangetastet, kein Rennen mit dem DMA-Callback. Ohne Kameraziffern → jetzt PC-testbar. |
+| `ferraris_counter_store` | ESP (C++) | **Neu.** Zählerstand (Quadratur-Schritte, nicht kWh → k-Änderung rechnet um) als Blob `cnt` {version, fwd, bwd} im NVS-Namespace `ferrcnt`. In `native` per `lib_ignore`. |
 | `ferraris_hwcheck` | pure C | Selbsttest-Klassifikation: `ferraris_hw_classify` (GPIO32/33 mit Pulls; floating ⇒ diff > 3800, Last ⇒ diff < 1500), `ferraris_hw_classify_noise` (GPIO34..39, Spread < 120 = stabil), GPIO→ADC1-Kanal. |
 | `ferraris_status` | pure C | **Neu.** Status-Snapshot + JSON-Formatter (gemeinsam für HTTP und MQTT). |
 | `ferraris_log` | pure C | **Neu.** `FLOGE/W/I(tag, …)` mit Laufzeit-Level. Ersetzt `ESP_LOGx`, weil der Core `ESP_LOGI/W` weg-kompiliert und der CSV-Modus stummschalten muss. |
@@ -209,14 +215,18 @@ Endpunkte (`*` = aus dem Heimnetz mit HTTP-Basic-Auth `admin` / AP-Passwort, üb
 - `GET /api/scan` `*` — asynchroner Scan; `{"scanning":true}` bis das Ergebnis da ist.
 - `POST /api/wifi` `*` — Formularfelder `ssid`, `password`; speichert im NVS und verbindet neu.
 - `GET /config` `*` — Einstellungen (Abschnitte mit Badge „sofort“ / „nach Neustart“), Live-Vorschau
-  der Schwellen je Eingang über seinem Rohwert, Neustart-Banner mit Hinweis, dass kWh dann bei 0
-  beginnen.
+  der Schwellen je Eingang über seinem Rohwert, Neustart-Banner, Karte „Zählerstand“ (Werte,
+  letzte Sicherung, „Zähler zurücksetzen“).
 - `GET /api/config` `*` — `{"settings":{…},"defaults":{…},"restart_pending":bool,"autotune":bool,
   "max_sensors":8,"min_sensors":2}`; `settings.gpio` = alle 8 Pins, aktiv sind die ersten
   `sensor_count`. Passwörter nur als `mqtt_password_set`/`ap_password_set`.
 - `POST /api/config` `*` `**` — Formularfelder wie im JSON (`gpio1`..`gpio8`, `mqtt_interval_s` in s,
   `ap_password2` = Wiederholung); Fehler `{"ok":false,"error":…,"field":…}`.
-- `POST /api/restart` `*` `**` — MQTT `offline`, Neustart nach ~0,5 s.
+- `POST /api/restart` `*` `**` — MQTT `offline`, Neustart nach ~0,5 s (über `ferraris_sysmon_restart()`,
+  sichert vorher den Zählerstand).
+- `POST /api/counter/reset` `*` `**` — Zählerstand auf 0 und sofort speichern (Karte „Zählerstand“
+  auf `/config`, mit Rückfrage). Status-JSON `meter.saved_s` = Sekunden, seit der gesicherte Stand
+  zuletzt aktuell war (−1 = noch nie); `/api/config` liefert `counter_persist`.
 - `GET /api/coredump` `*` — Absturzbericht roh (`esp-coredump info_corefile --core-format raw
   --core ferraris-coredump.bin .pio/build/esp32/firmware.elf`); `POST /api/coredump/delete` `*` `**`.
 - Status-JSON `health`: `reset`, `boots`, `crashes`, `safe_mode`, `heap_free/min/block`,
@@ -330,8 +340,8 @@ gcc -Wall -Wextra -I../../lib/schmitt_logic/src -I../../lib/ferraris_logger_logi
 
 - Auf echter Hardware prüfen: DMA-Sampling + WLAN gleichzeitig (Sample-Verluste, ADC-Rauschen →
   Schwellen), HTTP/MQTT im Dauerbetrieb.
-- Zählerstand über Stromausfall (`ferraris_persist` aus `ferraris-pio` portieren) — derzeit beginnen
-  kWh nach jedem Neustart bei 0.
+- Zählerstand: Bei Stromausfall/Absturz fehlen bis zu `FERRARIS_COUNTER_SAVE_INTERVAL_MS` (5 min).
+  Optional: Stand auf den echten Zählerstand setzen (Eingabefeld statt nur Reset).
 - Sicherheit: HTTP ohne TLS, Basic-Auth im Klartext im Heimnetz; Admin-Passwort = AP-Passwort
   (ändern über `/config` oder Default per `-DFERRARIS_AP_PASSWORD=…`). Passwort vergessen → nur
   Flash löschen hilft (kein Reset-Taster-Pfad). MQTT-Passwort liegt im NVS im Klartext.

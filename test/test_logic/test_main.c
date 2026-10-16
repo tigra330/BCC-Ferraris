@@ -242,6 +242,34 @@ static void test_data_energy(void)
     ferraris_data_destroy(d);
 }
 
+static void test_data_set_quad(void)
+{
+    ferraris_data_t *d = ferraris_data_create(150);
+    for (int i = 0; i < 10; i++) ferraris_data_add_quad(d, 1, (uint32_t)i);
+    ferraris_data_add_quad(d, -1, 10);
+    // Gespeicherten Stand uebernehmen: weitere Schritte zaehlen darauf weiter.
+    ferraris_data_set_quad(d, 6000, 300);
+    ferraris_data_add_quad(d, 1, 11);
+    ferraris_data_add_quad(d, -1, 12);
+    int32_t f, b;
+    ferraris_data_get_quad(d, &f, &b);
+    TEST_ASSERT_EQUAL(6001, f);
+    TEST_ASSERT_EQUAL(301, b);
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, 6001.0f / 600.0f, ferraris_data_get_import_kwh(d));
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, 301.0f / 600.0f, ferraris_data_get_export_kwh(d));
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, 5700.0f / 600.0f, ferraris_data_get_energy_kwh(d));
+    // Zuruecksetzen
+    ferraris_data_set_quad(d, 0, 0);
+    ferraris_data_get_quad(d, &f, &b);
+    TEST_ASSERT_EQUAL(0, f);
+    TEST_ASSERT_EQUAL(0, b);
+    ferraris_data_add_quad(d, 1, 13);
+    ferraris_data_get_quad(d, &f, &b);
+    TEST_ASSERT_EQUAL(1, f);
+    ferraris_data_set_quad(NULL, 1, 1);   // kein Absturz
+    ferraris_data_destroy(d);
+}
+
 // ─── HW-Klassifikation ───────────────────────────────────────────────────────
 
 static void test_hw_classify(void)
@@ -278,6 +306,7 @@ static void test_status_json(void)
     st.import_kwh = 0.0133f;
     st.net_kwh = 0.0133f;
     st.power_w = -412.34f;
+    st.saved_age_s = 42;
     st.threshold_high = 3450;
     st.threshold_low = 3300;
     st.count_a = "Q1";
@@ -311,7 +340,7 @@ static void test_status_json(void)
     int n = ferraris_status_to_json(&st, buf, sizeof(buf));
     TEST_ASSERT_GREATER_THAN(0, n);
     TEST_ASSERT_EQUAL((int)strlen(buf), n);
-    TEST_ASSERT_NOT_NULL(strstr(buf, "\"power_w\":-412.3"));
+    TEST_ASSERT_NOT_NULL(strstr(buf, "\"power_w\":-412.3,\"saved_s\":42}"));
     TEST_ASSERT_NOT_NULL(strstr(buf, "\"count_pair\":[\"Q1\",\"Q2\"]"));
     TEST_ASSERT_NOT_NULL(strstr(buf, "\"name\":\"Q\\\"1\""));   // Escape
     TEST_ASSERT_NOT_NULL(strstr(buf, "\"hw\":\"OK\",\"high\":2900,\"low\":2700}"));
@@ -740,6 +769,7 @@ int main(void)
     RUN_TEST(test_power_direction_change);
     RUN_TEST(test_power_timer_wrap);
     RUN_TEST(test_data_energy);
+    RUN_TEST(test_data_set_quad);
     RUN_TEST(test_hw_classify);
     RUN_TEST(test_status_json);
     RUN_TEST(test_wifi_credentials);

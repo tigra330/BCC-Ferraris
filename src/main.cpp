@@ -13,7 +13,8 @@
  *
  * Konfiguration: include/ferraris_config.h (Defaults), Zugangsdaten: include/secrets.h.
  * Ueber die Webseite /config geaenderte Werte liegen im NVS (ferraris_settings_store)
- * und haben beim Start Vorrang.
+ * und haben beim Start Vorrang. Der Zaehlerstand liegt ebenfalls im NVS
+ * (ferraris_counter_store): zyklisch und vor geplanten Neustarts gesichert.
  */
 
 #include <Arduino.h>
@@ -28,6 +29,7 @@
 #include "adc_continuous_sampler.h"
 #include "autotune_collector.h"
 #include "ferraris_calib.h"
+#include "ferraris_counter_store.h"
 #include "ferraris_data.h"
 #include "ferraris_hwdetect.h"
 #include "ferraris_log.h"
@@ -99,6 +101,12 @@ static uint16_t                         *s_calib_buf;
 static uint32_t                          s_calib_start_ms, s_calib_duration_ms, s_calib_elapsed_ms;
 static bool                              s_calib_reverse;
 static ferraris_calib_result_t           s_calib_result;
+
+// Zaehlerstand im NVS: zuletzt gesicherter Stand und wann er zuletzt dem
+// aktuellen entsprach (Speichern oder Pruefung ohne Aenderung). Nur loop()-Task.
+static int32_t                   s_saved_fwd = -1, s_saved_bwd = -1;
+static uint32_t                  s_saved_ms;
+static bool                      s_saved_known;   // NVS-Stand bekannt (geladen/geschrieben)
 
 // Einstellungen: Defaults (ferraris_config.h), Stand beim Start (an Sampler,
 // WLAN und MQTT uebergeben) und aktuell gespeicherter Stand (/config).
@@ -275,6 +283,92 @@ static bool settings_restart_pending(void)
 }
 
 #endif // FERRARIS_WIFI_ENABLE
+
+// ─── Zaehlerstand speichern ──────────────────────────────────────────────────
+
+/** setup(): gesicherten Stand uebernehmen (vor dem Start der Zaehlung). */
+static void counter_restore(void)
+{
+#if FERRARIS_COUNTER_PERSIST_ENABLE
+    int32_t fwd = 0, bwd = 0;
+    if (!ferraris_counter_load(&fwd, &bwd)) {
+        printf("# Kein gespeicherter Zaehlerstand - beginne bei 0\n");
+        return;
+    }
+    ferraris_data_set_quad(s_data, fwd, bwd);
+    s_saved_fwd   = fwd;
+    s_saved_bwd   = bwd;
+    s_saved_ms    = millis();
+    s_saved_known = true;
+    // Immer sichtbar (auch im CSV-Modus), als '#'-Kommentarzeile.
+    printf("# Zaehlerstand geladen: Bezug %.3f kWh, Einspeisung %.3f kWh (%ld/%ld Schritte)\n",
+           (double)ferraris_data_get_import_kwh(s_data), (double)ferraris_data_get_export_kwh(s_data),
+           (long)fwd, (long)bwd);
+#endif
+}
+
+/**
+ * @brief Stand ins NVS schreiben, falls er sich seit dem letzten Mal geaendert
+ *        hat (loop()-Task). Nie aus dem ADC-Pfad.
+ */
+static bool counter_save(void)
+{
+#if FERRARIS_COUNTER_PERSIST_ENABLE
+    if (!s_data) return false;
+    int32_t fwd, bwd;
+    ferraris_data_get_quad(s_data, &fwd, &bwd);
+    if (!s_saved_known || fwd != s_saved_fwd || bwd != s_saved_bwd) {
+        if (!ferraris_counter_save(fwd, bwd)) {
+            FLOGE(TAG, "Zaehlerstand konnte nicht gespeichert werden (NVS)");
+            return false;
+        }
+        s_saved_fwd   = fwd;
+        s_saved_bwd   = bwd;
+        s_saved_known = true;
+    }
+    s_saved_ms = millis();   // gesicherter Stand ist (wieder) aktuell
+    return true;
+#else
+    return false;
+#endif
+}
+
+/** loop(): zyklisch sichern (schreibt nur bei Aenderung). */
+static void counter_loop(void)
+{
+#if FERRARIS_COUNTER_PERSIST_ENABLE
+    if (FERRARIS_COUNTER_SAVE_INTERVAL_MS == 0 || !s_counting) return;
+    if (millis() - s_saved_ms >= FERRARIS_COUNTER_SAVE_INTERVAL_MS) counter_save();
+#endif
+}
+
+/** ferraris_sysmon: vor Neustart (Webseite, Firmware-Update, Rollback). */
+static void counter_before_restart(void)
+{
+#if FERRARIS_COUNTER_PERSIST_ENABLE
+    if (!s_data) return;
+    if (counter_save()) {
+        printf("# Zaehlerstand gesichert: Bezug %.3f kWh, Einspeisung %.3f kWh\n",
+               (double)ferraris_data_get_import_kwh(s_data),
+               (double)ferraris_data_get_export_kwh(s_data));
+    }
+#endif
+}
+
+#if FERRARIS_WIFI_ENABLE   // zurueckgesetzt wird nur ueber die Webseite
+static bool counter_reset(const char **why)
+{
+    if (!s_data) { *why = "Zaehler nicht initialisiert"; return false; }
+    ferraris_data_set_quad(s_data, 0, 0);
+#if FERRARIS_COUNTER_PERSIST_ENABLE
+    if (!counter_save()) {
+        *why = "Zurueckgesetzt, aber Speichern im NVS fehlgeschlagen";
+        return false;
+    }
+#endif
+    return true;
+}
+#endif
 
 // ─── Automatisches Einmessen ─────────────────────────────────────────────────
 
@@ -536,6 +630,7 @@ static void fill_status(ferraris_status_t *st)
     st->export_kwh     = ferraris_data_get_export_kwh(s_data);
     st->net_kwh        = ferraris_data_get_energy_kwh(s_data);
     st->power_w        = ferraris_data_get_power_watts(s_data, now);
+    st->saved_age_s    = s_saved_known ? (int32_t)((millis() - s_saved_ms) / 1000) : -1;
     st->threshold_high = s_logic_a.threshold_high;
     st->threshold_low  = s_logic_a.threshold_low;
     st->count_a        = s_sensor_names[s_idx_a];
@@ -599,6 +694,12 @@ static void print_boot_config(void)
     FLOGI(TAG, "Einstellg.: %s", s_safe_mode ? "WERKSEINSTELLUNGEN (abgesicherter Modus)"
                                  : s_settings_from_nvs ? "aus NVS (Webseite /config)" : "Defaults");
     FLOGI(TAG, "Zaehlerkonstante: %ld Umdrehungen/kWh", (long)s_boot.revs_per_kwh);
+#if FERRARIS_COUNTER_PERSIST_ENABLE
+    FLOGI(TAG, "Zaehlerst.: NVS, alle %lu s (bei Aenderung) und vor geplanten Neustarts",
+          (unsigned long)(FERRARIS_COUNTER_SAVE_INTERVAL_MS / 1000));
+#else
+    FLOGI(TAG, "Zaehlerst.: nicht gespeichert (beginnt nach jedem Start bei 0)");
+#endif
     FLOGI(TAG, "ADC     : continuous/DMA %d Hz (~%d Hz je Sensor), Snapshot %d / Decim %d",
           FERRARIS_ADC_DMA_SAMPLE_RATE_HZ, FERRARIS_ADC_DMA_SAMPLE_RATE_HZ / s_n_sensors,
           FERRARIS_ADC_DMA_SNAPSHOT_CAPACITY, FERRARIS_ADC_DMA_SNAPSHOT_DECIMATION);
@@ -695,6 +796,7 @@ void setup()
         .ota_min_ms        = FERRARIS_OTA_VERIFY_MIN_MS,
         .ota_stable_ms     = FERRARIS_OTA_VERIFY_STABLE_MS,
         .ota_timeout_ms    = FERRARIS_OTA_VERIFY_TIMEOUT_MS,
+        .before_restart    = counter_before_restart,
     };
     s_safe_mode = ferraris_sysmon_boot(&sysmon_cfg);
     settings_load();
@@ -707,6 +809,7 @@ void setup()
         FLOGE(TAG, "Kein Speicher fuer Zaehler/Decoder/Logger - Abbruch");
         return;
     }
+    counter_restore();
 
     adc_channel_t sensor_ch[MAX_SENSORS];
     if (!sensor_channels(sensor_ch)) return;
@@ -762,6 +865,8 @@ void setup()
         .console_pause_ms  = FERRARIS_CONSOLE_PAUSE_MS,
         .settings          = &settings_ops,
         .calib             = &calib_ops,
+        .counter_reset_fn  = counter_reset,
+        .counter_persist   = FERRARIS_COUNTER_PERSIST_ENABLE != 0,
     };
     ferraris_net_begin(&net_cfg, fill_status, csv_row);
 #endif
@@ -814,6 +919,7 @@ void loop()
     }
     adc_watchdog();
     calib_loop();
+    counter_loop();
 #if FERRARIS_WIFI_ENABLE
     ferraris_net_loop();
     const bool net_ok = ferraris_net_healthy();

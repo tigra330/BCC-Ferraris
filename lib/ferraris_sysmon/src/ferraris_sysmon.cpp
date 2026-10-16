@@ -146,6 +146,13 @@ void ferraris_sysmon_set_restart_cause(ferraris_restart_cause_t cause)
     s_rtc.cause = (uint32_t)cause;
 }
 
+void ferraris_sysmon_restart(void)
+{
+    if (s_cfg.before_restart) s_cfg.before_restart();
+    fflush(stdout);
+    esp_restart();
+}
+
 static void watchdog_task(void *arg)
 {
     (void)arg;
@@ -213,6 +220,7 @@ void ferraris_sysmon_loop(bool healthy)
             printf("# Neue Firmware nach %lu s nicht gesund (ADC/Netz) - schalte zurueck\n",
                    (unsigned long)(now / 1000));
             ferraris_sysmon_set_restart_cause(FERRARIS_RESTART_OTA_ROLLBACK);
+            if (s_cfg.before_restart) s_cfg.before_restart();
             fflush(stdout);
             // Kehrt nur zurueck, wenn es keine gueltige Vorgaenger-Firmware gibt.
             esp_err_t err = esp_ota_mark_app_invalid_rollback_and_reboot();

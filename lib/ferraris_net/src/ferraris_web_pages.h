@@ -82,9 +82,9 @@ footer{margin-top:4px}
 <div class="muted" id="pdir"></div></div></div>
 
 <div class="tiles">
-<div class="card"><div class="l">Bezug</div><div class="v num" id="imp">-</div><div class="muted">kWh seit Start</div></div>
-<div class="card"><div class="l">Einspeisung</div><div class="v num" id="exp">-</div><div class="muted">kWh seit Start</div></div>
-<div class="card"><div class="l">Netto</div><div class="v num" id="netkwh">-</div><div class="muted">kWh seit Start</div></div>
+<div class="card"><div class="l">Bezug</div><div class="v num" id="imp">-</div><div class="muted">kWh</div></div>
+<div class="card"><div class="l">Einspeisung</div><div class="v num" id="exp">-</div><div class="muted">kWh</div></div>
+<div class="card"><div class="l">Netto</div><div class="v num" id="netkwh">-</div><div class="muted">kWh</div></div>
 <div class="card"><div class="l">Umdrehungen</div><div class="v num" id="revs">-</div><div class="muted" id="kinfo"></div></div>
 </div>
 
@@ -337,6 +337,8 @@ table.cal th:first-child,table.cal td:first-child{text-align:left}
 table.cal th{color:var(--fg2);font-weight:500;border-top:0}
 table.cal tr.pick td{font-weight:600}
 .calwrap{overflow-x:auto}
+.kv{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px 16px}
+.kv .v{font-weight:600}
 .thrrow{padding:10px 0;border-top:1px solid var(--line)}
 .thrrow:first-child{border-top:0}
 .thrrow.off{opacity:.6}
@@ -361,7 +363,7 @@ unten im Formular, wirken aber gerade nicht. Werte pruefen (z. B. Eingaenge), sp
 
 <div class="card" id="banner" hidden><h2>Neustart erforderlich</h2>
 <div>Einige gespeicherte Aenderungen wirken erst nach einem Neustart.</div>
-<p class="muted hint">Achtung: Die kWh-Zaehler beginnen nach dem Neustart wieder bei 0.</p>
+<p class="muted hint">Der Zaehlerstand wird vorher gesichert und laeuft danach weiter.</p>
 <div class="row"><button type="button" id="restart">Jetzt neu starten</button></div></div>
 
 <div class="card" id="calcard"><h2>Automatisch einmessen</h2>
@@ -383,6 +385,12 @@ Die Zaehlung laeuft dabei weiter. Die Scheibe muss sich mindestens zweimal drehe
 <th>Ausschlag</th><th>HIGH</th><th>LOW</th><th>Durchgaenge</th></tr></thead><tbody id="calbody"></tbody></table></div>
 <p class="muted hint" id="calinfo"></p>
 <div class="row"><button type="button" id="calapply">Vorschlag ins Formular uebernehmen</button></div></div></div>
+
+<div class="card" id="cntcard"><h2>Zaehlerstand</h2>
+<div class="kv num" id="cntinfo">...</div>
+<p class="muted hint" id="cnthint"></p>
+<div class="row"><button type="button" class="sec" id="cntreset" hidden>Zaehler zuruecksetzen</button></div>
+<div id="cntmsg" role="status" style="margin-top:10px"></div></div>
 
 <form id="form" autocomplete="off" novalidate>
 <div class="card"><h2>Zaehler <span class="badge">sofort</span></h2>
@@ -443,7 +451,7 @@ Gut merken: ohne das Passwort hilft nur neu flashen mit Loeschen des Speichers.<
 <label for="fwfile">Neue Firmware (<code>firmware.bin</code> aus <code>.pio/build/esp32/</code>)</label>
 <input id="fwfile" type="file" accept=".bin,application/octet-stream">
 <progress id="otaprog" max="1" value="0" hidden></progress>
-<p class="muted hint">Der Zaehler startet danach neu, die kWh-Zaehler beginnen wieder bei 0. Einstellungen und WLAN bleiben.
+<p class="muted hint">Der Zaehler startet danach neu. Zaehlerstand, Einstellungen und WLAN bleiben.
 Schlaegt das Update fehl, laeuft die bisherige Firmware unveraendert weiter.</p>
 <div class="row"><button type="button" id="otabtn" disabled>Installieren</button></div>
 <div id="otamsg" role="status"></div></div>
@@ -574,9 +582,33 @@ async function load(){
     if(cd.present)$('cdinfo').textContent=`${Math.round(cd.size/1024)} KB, Task ${cd.task||'?'}, PC ${cd.pc}`+(cd.reason?` – ${cd.reason}`:'');
   }catch(e){say('crit','Einstellungen konnten nicht geladen werden');}
 }
-async function live(){
-  try{last=await (await fetch('/api/status',{cache:'no-store'})).json();renderLive();}catch(e){}
+const kwh=v=>v.toLocaleString('de-DE',{minimumFractionDigits:3,maximumFractionDigits:3});
+function ago(s){return s<90?`${s} s`:(s<5400?`${Math.round(s/60)} min`:`${Math.round(s/3600)} h`);}
+function renderCounter(){
+  if(!last)return;
+  const m=last.meter,box=$('cntinfo');box.replaceChildren();
+  const rows=[['Bezug',kwh(m.import_kwh)+' kWh'],['Einspeisung',kwh(m.export_kwh)+' kWh'],['Netto',kwh(m.net_kwh)+' kWh'],
+    ['Umdrehungen',((m.steps_import-m.steps_export)/4).toLocaleString('de-DE')],
+    ['Gesichert',m.saved_s<0?'noch nicht':`vor ${ago(m.saved_s)}`]];
+  for(const [l,v] of rows){const e=el('div');e.append(el('div','l',l),el('div','v',v));box.append(e);}
+  $('cnthint').textContent=cfg&&!cfg.counter_persist?'Der Zaehlerstand wird nicht gespeichert und beginnt nach jedem Neustart bei 0.':
+    'Gespeichert wird regelmaessig (nur bei Aenderung) und vor jedem Neustart oder Firmware-Update. '+
+    'Bei Stromausfall fehlen hoechstens die Umdrehungen seit der letzten Sicherung.';
+  $('cntreset').hidden=false;
 }
+async function live(){
+  try{last=await (await fetch('/api/status',{cache:'no-store'})).json();renderLive();renderCounter();}catch(e){}
+}
+$('cntreset').onclick=async()=>{
+  if(!confirm('Zaehlerstand wirklich auf 0 setzen? Bezug, Einspeisung und Umdrehungen gehen verloren.'))return;
+  const msg=$('cntmsg');$('cntreset').disabled=true;
+  try{
+    const j=await (await fetch('/api/counter/reset',{method:'POST',headers:{'X-Ferraris':'1'}})).json();
+    msg.className=j.ok?'ok':'crit';msg.textContent=j.ok?'Zaehlerstand auf 0 gesetzt.':(j.error||'Fehler');
+    live();
+  }catch(e){msg.className='crit';msg.textContent='Zuruecksetzen fehlgeschlagen';}
+  $('cntreset').disabled=false;
+};
 
 $('form').oninput=e=>{e.target.classList.remove('bad');update();};
 $('thrall').onclick=()=>{
@@ -614,7 +646,7 @@ $('form').onsubmit=async e=>{
   $('save').disabled=false;
 };
 $('restart').onclick=async()=>{
-  if(!confirm('Jetzt neu starten? Die kWh-Zaehler beginnen danach wieder bei 0.'))return;
+  if(!confirm('Jetzt neu starten? Der Zaehlerstand wird vorher gesichert.'))return;
   $('restart').disabled=true;
   try{await fetch('/api/restart',{method:'POST',headers:{'X-Ferraris':'1'}});}catch(e){}
   if(!await awaitReboot(say))$('restart').disabled=false;
@@ -629,7 +661,7 @@ $('fwfile').onchange=async()=>{
 };
 $('otabtn').onclick=()=>{
   const f=$('fwfile').files[0];if(!f)return;
-  if(!confirm('Firmware installieren? Der Zaehler startet danach neu, die kWh-Zaehler beginnen wieder bei 0.'))return;
+  if(!confirm('Firmware installieren? Der Zaehler startet danach neu, der Zaehlerstand wird vorher gesichert.'))return;
   const fd=new FormData();fd.append('firmware',f,f.name);
   const x=new XMLHttpRequest(),prog=$('otaprog');
   x.open('POST','/api/ota');x.setRequestHeader('X-Ferraris','1');

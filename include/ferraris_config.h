@@ -145,6 +145,21 @@
 #define FERRARIS_ADC_STALL_MS 3000
 #endif
 
+// ─── Zaehlerstand speichern (ferraris_counter_store) ────────────────────────
+
+/** Zaehlerstand im NVS halten: beim Start laden, zyklisch und vor jedem
+ *  geplanten Neustart (Webseite, Firmware-Update, Rollback) speichern. */
+#ifndef FERRARIS_COUNTER_PERSIST_ENABLE
+#define FERRARIS_COUNTER_PERSIST_ENABLE 1
+#endif
+/** Zyklisch speichern, aber nur wenn sich der Stand geaendert hat. Das ist
+ *  der Verlust bei Stromausfall/Absturz (dort bleibt keine Zeit zum Sichern).
+ *  5 min: bei Volllast < 0,4 kWh Verlust, NVS-Verschleiss unkritisch
+ *  (siehe ferraris_counter_store.h). 0 = nur vor geplanten Neustarts. */
+#ifndef FERRARIS_COUNTER_SAVE_INTERVAL_MS
+#define FERRARIS_COUNTER_SAVE_INTERVAL_MS (5UL * 60UL * 1000UL)
+#endif
+
 // ─── Robustheit (ferraris_sysmon) ────────────────────────────────────────────
 
 /** loop() (WLAN, HTTP, MQTT) haengt so lange -> Neustart. Weit ueber dem

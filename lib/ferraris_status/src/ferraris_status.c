@@ -46,10 +46,11 @@ int ferraris_status_to_json(const ferraris_status_t *st, char *buf, size_t len)
     put(&o, "{\"uptime_s\":%lu,\"counting\":%s,",
         (unsigned long)st->uptime_s, st->counting ? "true" : "false");
     put(&o, "\"meter\":{\"k\":%ld,\"steps_import\":%ld,\"steps_export\":%ld,"
-            "\"import_kwh\":%.4f,\"export_kwh\":%.4f,\"net_kwh\":%.4f,\"power_w\":%.1f},",
+            "\"import_kwh\":%.4f,\"export_kwh\":%.4f,\"net_kwh\":%.4f,\"power_w\":%.1f,"
+            "\"saved_s\":%ld},",
         (long)st->revs_per_kwh, (long)st->steps_import, (long)st->steps_export,
         (double)st->import_kwh, (double)st->export_kwh, (double)st->net_kwh,
-        (double)st->power_w);
+        (double)st->power_w, (long)st->saved_age_s);
     put(&o, "\"schmitt\":{\"high\":%d,\"low\":%d},\"count_pair\":[",
         st->threshold_high, st->threshold_low);
     put_str(&o, st->count_a);
