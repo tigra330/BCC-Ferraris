@@ -38,6 +38,13 @@ static void put_str(out_t *o, const char *s)
     put(o, "\"");
 }
 
+// JJJJMMTT -> "JJJJ-MM-TT", 0 -> null
+static void put_day(out_t *o, int32_t id)
+{
+    if (id <= 0) put(o, "null");
+    else put(o, "\"%04ld-%02ld-%02ld\"", (long)(id / 10000), (long)(id / 100 % 100), (long)(id % 100));
+}
+
 int ferraris_status_to_json(const ferraris_status_t *st, char *buf, size_t len)
 {
     if (!st || !buf || len == 0) return -1;
@@ -46,11 +53,16 @@ int ferraris_status_to_json(const ferraris_status_t *st, char *buf, size_t len)
     put(&o, "{\"uptime_s\":%lu,\"counting\":%s,",
         (unsigned long)st->uptime_s, st->counting ? "true" : "false");
     put(&o, "\"meter\":{\"k\":%ld,\"steps_import\":%ld,\"steps_export\":%ld,"
-            "\"import_kwh\":%.4f,\"export_kwh\":%.4f,\"net_kwh\":%.4f,\"power_w\":%.1f,"
-            "\"saved_s\":%ld},",
+            "\"import_kwh\":%.4f,\"export_kwh\":%.4f,\"net_kwh\":%.4f,\"day\":",
         (long)st->revs_per_kwh, (long)st->steps_import, (long)st->steps_export,
-        (double)st->import_kwh, (double)st->export_kwh, (double)st->net_kwh,
-        (double)st->power_w, (long)st->saved_age_s);
+        st->import_kwh, st->export_kwh, st->net_kwh);
+    put_day(&o, st->day_id);
+    put(&o, ",\"day_import_kwh\":%.4f,\"day_export_kwh\":%.4f,\"prev_day\":",
+        st->day_import_kwh, st->day_export_kwh);
+    put_day(&o, st->prev_day_id);
+    put(&o, ",\"prev_import_kwh\":%.4f,\"prev_export_kwh\":%.4f,\"power_w\":%.1f,"
+            "\"saved_s\":%ld},",
+        st->prev_import_kwh, st->prev_export_kwh, (double)st->power_w, (long)st->saved_age_s);
     put(&o, "\"schmitt\":{\"high\":%d,\"low\":%d},\"count_pair\":[",
         st->threshold_high, st->threshold_low);
     put_str(&o, st->count_a);

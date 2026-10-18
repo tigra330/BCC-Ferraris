@@ -68,18 +68,28 @@ def power(t):
     return 450 + 250 * math.sin(t / 300) + random.uniform(-20, 20)
 
 
-COUNTER = {"base": 0}   # Zuruecksetzen: Schritte bis dahin abziehen
+COUNTER = {"base": 0, "exp": 4, "day_base": 600}   # Setzen/Zuruecksetzen: Schritte verschieben
+
+
+def counted():
+    return 640 + int(time.time() - START0) // 30
 
 
 def status():
     up = int(time.time() - START) + 7200
-    steps = 640 + int(time.time() - START0) // 30 - COUNTER["base"]
-    exp = 0 if COUNTER["base"] else 4
+    steps = counted() - COUNTER["base"]
+    exp = COUNTER["exp"]
+    day = counted() - COUNTER["day_base"]
+    k4 = 4 * SETTINGS["k"]
     return {
         "uptime_s": up, "counting": True,
         "meter": {"k": SETTINGS["k"], "steps_import": steps, "steps_export": exp,
-                  "import_kwh": steps / 600, "export_kwh": exp / 600,
-                  "net_kwh": (steps - exp) / 600, "power_w": round(power(time.time()), 1),
+                  "import_kwh": steps / k4, "export_kwh": exp / k4,
+                  "net_kwh": (steps - exp) / k4,
+                  "day": time.strftime("%Y-%m-%d"), "day_import_kwh": day / k4, "day_export_kwh": 0.0,
+                  "prev_day": time.strftime("%Y-%m-%d", time.localtime(time.time() - 86400)),
+                  "prev_import_kwh": 3.21, "prev_export_kwh": 0.475,
+                  "power_w": round(power(time.time()), 1),
                   "saved_s": int(time.time() - START0) % 300},
         "schmitt": {"high": SETTINGS["high"][BOOT["count_a"] - 1], "low": SETTINGS["low"][BOOT["count_a"] - 1]},
         "count_pair": [f"Q{BOOT['count_a']}", f"Q{BOOT['count_b']}"],
@@ -237,7 +247,22 @@ class Handler(BaseHTTPRequestHandler):
             CALIB["state"] = "idle" if f.get("mode") == "cancel" else "done"
             return self._send(200, json.dumps({"ok": True}))
         if self.path == "/api/counter/reset":
-            COUNTER["base"] = 640 + int(time.time() - START0) // 30
+            COUNTER.update(base=counted(), exp=0)
+            return self._send(200, json.dumps({"ok": True}))
+        if self.path == "/api/counter/set":
+            f = {k: v[0] for k, v in parse_qs(raw.decode(), keep_blank_values=True).items()}
+            vals = {}
+            for key in ("import_kwh", "export_kwh"):
+                txt = f.get(key, "").strip().replace(",", ".")
+                try:
+                    vals[key] = float(txt)
+                    if vals[key] < 0 or "e" in txt.lower():
+                        raise ValueError
+                except ValueError:
+                    return self._send(400, json.dumps({"ok": False, "field": key,
+                                                       "error": "Bitte eine Zahl >= 0 eingeben (z. B. 12345,6)"}))
+            k4 = 4 * SETTINGS["k"]
+            COUNTER.update(base=counted() - round(vals["import_kwh"] * k4), exp=round(vals["export_kwh"] * k4))
             return self._send(200, json.dumps({"ok": True}))
         if self.path == "/api/coredump/delete":
             COREDUMP["present"] = False

@@ -59,14 +59,22 @@ bzw. `# Access Point … aktiv`.
   steht auf dem Dashboard.
 - Eine Überwachung startet die Abtastung neu, falls 3 Sekunden lang keine Messwerte kommen.
 
-> **Hinweis:** Die kWh-Werte zählen ab dem letzten Start. Nach einem Neustart oder Stromausfall
-> beginnen sie wieder bei 0. Der Zählerstand wird noch nicht gespeichert.
+- **Gesamtstand** (Bezug, Lieferung/Einspeisung, Netto): wird im Flash gesichert (alle 5 min bei
+  Änderung und vor jedem geplanten Neustart) und läuft nach Neustart oder Stromausfall weiter.
+  Auf `/config` lässt er sich auf den Stand am Zählwerk setzen. Hat der Zähler nur ein Zählwerk
+  (läuft bei Einspeisung rückwärts), den Stand als Bezug und 0 als Lieferung eintragen, dann
+  entspricht „Netto gesamt“ der Anzeige am Zähler.
+- **Tagesbezug / Tageslieferung**: seit 0:00 Uhr (Uhrzeit per NTP über das Heim-WLAN, Zeitzone
+  Mitteleuropa), dazu der Vortag. Solange keine Uhrzeit bekannt ist, zählen die Tageswerte ab dem Start.
+
+> **Hinweis:** Bei Stromausfall oder Absturz fehlen höchstens die Umdrehungen seit der letzten
+> Sicherung (bis zu 5 min).
 
 ### Webseiten
 
 | Adresse | Inhalt | Anmeldung |
 |---|---|---|
-| `/` | Dashboard: Leistung, Bezug/Einspeisung/Netto, Umdrehungen, Verlauf der letzten 60 min, Lichtschranken mit Rohwert und Schwellen, WLAN-Status | nein |
+| `/` | Dashboard: Leistung, Tagesbezug/Tageslieferung (mit Vortag), Bezug/Lieferung/Netto gesamt, Umdrehungen, Verlauf der letzten 60 min, Lichtschranken mit Rohwert und Schwellen, WLAN-Status | nein |
 | `/wifi` | WLAN suchen, auswählen und verbinden | ja¹ |
 | `/config` | Einstellungen (siehe unten), Neustart, Firmware-Update | ja¹ |
 

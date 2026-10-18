@@ -82,9 +82,15 @@ footer{margin-top:4px}
 <div class="muted" id="pdir"></div></div></div>
 
 <div class="tiles">
-<div class="card"><div class="l">Bezug</div><div class="v num" id="imp">-</div><div class="muted">kWh</div></div>
-<div class="card"><div class="l">Einspeisung</div><div class="v num" id="exp">-</div><div class="muted">kWh</div></div>
-<div class="card"><div class="l">Netto</div><div class="v num" id="netkwh">-</div><div class="muted">kWh</div></div>
+<div class="card"><div class="l">Tagesbezug</div><div class="v num" id="dimp">-</div>
+<div class="muted" id="dimpi">kWh</div><div class="muted" id="pimp"></div></div>
+<div class="card"><div class="l">Tageslieferung</div><div class="v num" id="dexp">-</div>
+<div class="muted" id="dexpi">kWh</div><div class="muted" id="pexp"></div></div>
+</div>
+<div class="tiles">
+<div class="card"><div class="l">Bezug gesamt</div><div class="v num" id="imp">-</div><div class="muted">kWh (Zaehlerstand)</div></div>
+<div class="card"><div class="l">Lieferung gesamt</div><div class="v num" id="exp">-</div><div class="muted">kWh (Zaehlerstand)</div></div>
+<div class="card"><div class="l">Netto gesamt</div><div class="v num" id="netkwh">-</div><div class="muted">kWh</div></div>
 <div class="card"><div class="l">Umdrehungen</div><div class="v num" id="revs">-</div><div class="muted" id="kinfo"></div></div>
 </div>
 
@@ -184,6 +190,11 @@ function renderChart(){
   svg.onpointerleave=()=>{cross.setAttribute('visibility','hidden');dot.setAttribute('visibility','hidden');tip.style.display='none';};
 }
 
+// "2026-10-17" -> "Vortag" (gestern) bzw. "17.10."
+function dayName(iso){
+  const [y,mo,da]=iso.split('-').map(Number),g=new Date();g.setDate(g.getDate()-1);
+  return (g.getFullYear()==y&&g.getMonth()+1==mo&&g.getDate()==da)?'Vortag':`${da}.${mo}.`;
+}
 async function tick(){
   try{
     const d=await (await fetch('/api/status',{cache:'no-store'})).json(),m=d.meter;
@@ -191,6 +202,12 @@ async function tick(){
     $('pdir').textContent=m.power_w>0?'Bezug':(m.power_w<0?'Einspeisung':'Stillstand / noch keine volle Umdrehung');
     $('imp').textContent=fmt(m.import_kwh,3);$('exp').textContent=fmt(m.export_kwh,3);
     $('netkwh').textContent=fmt(m.net_kwh,3);
+    $('dimp').textContent=fmt(m.day_import_kwh,3);$('dexp').textContent=fmt(m.day_export_kwh,3);
+    const since=m.day?'kWh seit 0:00 Uhr':'kWh seit Start (Uhrzeit noch unbekannt)';
+    $('dimpi').textContent=since;$('dexpi').textContent=since;
+    const pd=m.prev_day?`${dayName(m.prev_day)}: `:'';
+    $('pimp').textContent=m.prev_day?pd+fmt(m.prev_import_kwh,3)+' kWh':'';
+    $('pexp').textContent=m.prev_day?pd+fmt(m.prev_export_kwh,3)+' kWh':'';
     $('revs').textContent=fmt((m.steps_import-m.steps_export)/4,2);$('kinfo').textContent=`k = ${m.k} U/kWh`;
     const w=d.wifi;
     $('netdot').style.background=w.connected?'var(--good)':(w.ap.active?'var(--warn)':'var(--crit)');
@@ -321,6 +338,7 @@ input[type=checkbox]{width:auto;margin:0 8px 0 0;accent-color:var(--btn)}
 .check{display:flex;align-items:center;margin-top:14px;color:var(--fg)}
 .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:0 12px}
 .card h2{display:flex;align-items:center;gap:8px}
+.card h3{font-size:14px;margin:18px 0 0}
 .badge{font-size:11px;font-weight:500;padding:1px 8px;border-radius:999px;border:1px solid var(--line);color:var(--fg2)}
 .hint{margin:6px 0 0}
 .bad{border-color:var(--crit);outline:1px solid var(--crit)}
@@ -389,7 +407,17 @@ Die Zaehlung laeuft dabei weiter. Die Scheibe muss sich mindestens zweimal drehe
 <div class="card" id="cntcard"><h2>Zaehlerstand</h2>
 <div class="kv num" id="cntinfo">...</div>
 <p class="muted hint" id="cnthint"></p>
-<div class="row"><button type="button" class="sec" id="cntreset" hidden>Zaehler zuruecksetzen</button></div>
+<h3>Zaehlerstand eingeben</h3>
+<p class="muted hint">Den Stand vom Zaehlwerk ablesen und eintragen, danach zaehlt der Ausleser darauf weiter.
+Hat der Zaehler nur ein Zaehlwerk (laeuft bei Einspeisung rueckwaerts), den Stand als Bezug und 0 als Lieferung
+eintragen - dann entspricht &bdquo;Netto gesamt&ldquo; der Anzeige am Zaehler. Tageswerte bleiben erhalten.
+Nach einer Aenderung von k den Stand neu eingeben.</p>
+<div class="grid">
+<div><label for="cntimp">Bezug (kWh)</label><input id="cntimp" type="text" inputmode="decimal" placeholder="z. B. 12345,6"></div>
+<div><label for="cntexp">Lieferung / Einspeisung (kWh)</label><input id="cntexp" type="text" inputmode="decimal" placeholder="0"></div>
+</div>
+<div class="row"><button type="button" id="cntset">Zaehlerstand uebernehmen</button>
+<button type="button" class="sec" id="cntreset" hidden>Zaehler zuruecksetzen</button></div>
 <div id="cntmsg" role="status" style="margin-top:10px"></div></div>
 
 <form id="form" autocomplete="off" novalidate>
@@ -587,9 +615,14 @@ function ago(s){return s<90?`${s} s`:(s<5400?`${Math.round(s/60)} min`:`${Math.r
 function renderCounter(){
   if(!last)return;
   const m=last.meter,box=$('cntinfo');box.replaceChildren();
-  const rows=[['Bezug',kwh(m.import_kwh)+' kWh'],['Einspeisung',kwh(m.export_kwh)+' kWh'],['Netto',kwh(m.net_kwh)+' kWh'],
+  const rows=[['Bezug gesamt',kwh(m.import_kwh)+' kWh'],['Lieferung gesamt',kwh(m.export_kwh)+' kWh'],
+    ['Netto gesamt',kwh(m.net_kwh)+' kWh'],
+    ['Tagesbezug',kwh(m.day_import_kwh)+' kWh'],['Tageslieferung',kwh(m.day_export_kwh)+' kWh'],
+    ['Tag',m.day?m.day.split('-').reverse().join('.'):'Uhrzeit unbekannt (seit Start)'],
     ['Umdrehungen',((m.steps_import-m.steps_export)/4).toLocaleString('de-DE')],
     ['Gesichert',m.saved_s<0?'noch nicht':`vor ${ago(m.saved_s)}`]];
+  if(m.prev_day)rows.splice(6,0,[`Vortag ${m.prev_day.split('-').reverse().join('.')}`,
+    `${kwh(m.prev_import_kwh)} / ${kwh(m.prev_export_kwh)} kWh`]);
   for(const [l,v] of rows){const e=el('div');e.append(el('div','l',l),el('div','v',v));box.append(e);}
   $('cnthint').textContent=cfg&&!cfg.counter_persist?'Der Zaehlerstand wird nicht gespeichert und beginnt nach jedem Neustart bei 0.':
     'Gespeichert wird regelmaessig (nur bei Aenderung) und vor jedem Neustart oder Firmware-Update. '+
@@ -600,7 +633,7 @@ async function live(){
   try{last=await (await fetch('/api/status',{cache:'no-store'})).json();renderLive();renderCounter();}catch(e){}
 }
 $('cntreset').onclick=async()=>{
-  if(!confirm('Zaehlerstand wirklich auf 0 setzen? Bezug, Einspeisung und Umdrehungen gehen verloren.'))return;
+  if(!confirm('Zaehlerstand wirklich auf 0 setzen? Bezug, Lieferung und Umdrehungen gesamt gehen verloren (Tageswerte bleiben).'))return;
   const msg=$('cntmsg');$('cntreset').disabled=true;
   try{
     const j=await (await fetch('/api/counter/reset',{method:'POST',headers:{'X-Ferraris':'1'}})).json();
@@ -608,6 +641,24 @@ $('cntreset').onclick=async()=>{
     live();
   }catch(e){msg.className='crit';msg.textContent='Zuruecksetzen fehlgeschlagen';}
   $('cntreset').disabled=false;
+};
+
+$('cntset').onclick=async()=>{
+  const msg=$('cntmsg'),imp=$('cntimp'),exp=$('cntexp');
+  imp.classList.remove('bad');exp.classList.remove('bad');
+  if(!exp.value.trim())exp.value='0';
+  if(!confirm(`Zaehlerstand setzen auf Bezug ${imp.value} kWh, Lieferung ${exp.value} kWh?`))return;
+  $('cntset').disabled=true;
+  try{
+    const r=await fetch('/api/counter/set',{method:'POST',headers:{'X-Ferraris':'1'},
+      body:new URLSearchParams({import_kwh:imp.value,export_kwh:exp.value})});
+    const j=await r.json();
+    msg.className=j.ok?'ok':'crit';msg.textContent=j.ok?'Zaehlerstand gesetzt und gespeichert.':(j.error||'Fehler');
+    if(!j.ok&&j.field)$(j.field=='import_kwh'?'cntimp':'cntexp').classList.add('bad');
+    if(j.ok){imp.value='';exp.value='';}
+    live();
+  }catch(e){msg.className='crit';msg.textContent='Setzen fehlgeschlagen';}
+  $('cntset').disabled=false;
 };
 
 $('form').oninput=e=>{e.target.classList.remove('bad');update();};

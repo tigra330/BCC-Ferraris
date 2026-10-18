@@ -34,6 +34,15 @@ bool ferraris_wifi_credentials_valid(const char *ssid, const char *password, con
  */
 int ferraris_json_string(char *buf, size_t len, const char *s);
 
+/**
+ * @brief Dezimalzahl aus einem Formularfeld lesen ("12345,6" oder "12345.6").
+ *
+ * Komma und Punkt gelten als Dezimaltrennzeichen (nur eines erlaubt), keine
+ * Tausenderpunkte, Leerzeichen am Rand werden ignoriert. Nur Werte >= 0.
+ * @return false bei leerem/ungueltigem Text oder negativem Wert
+ */
+bool ferraris_parse_decimal(const char *s, double *out);
+
 #ifdef __cplusplus
 }
 #endif

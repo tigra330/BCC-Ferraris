@@ -15,9 +15,11 @@
  * Ueber die Webseite /config geaenderte Werte liegen im NVS (ferraris_settings_store)
  * und haben beim Start Vorrang. Der Zaehlerstand liegt ebenfalls im NVS
  * (ferraris_counter_store): zyklisch und vor geplanten Neustarts gesichert.
+ * Tageswerte (ferraris_day) wechseln um 0:00 Uhr lokal (Uhrzeit per NTP).
  */
 
 #include <Arduino.h>
+#include <time.h>
 
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -31,6 +33,7 @@
 #include "ferraris_calib.h"
 #include "ferraris_counter_store.h"
 #include "ferraris_data.h"
+#include "ferraris_day.h"
 #include "ferraris_hwdetect.h"
 #include "ferraris_log.h"
 #include "ferraris_logger.h"
@@ -102,9 +105,12 @@ static uint32_t                          s_calib_start_ms, s_calib_duration_ms, 
 static bool                              s_calib_reverse;
 static ferraris_calib_result_t           s_calib_result;
 
+// Tageswerte (Basis zu Tagesbeginn, Vortag). Schreiber: loop()-Task.
+static ferraris_day_t            s_day;
+
 // Zaehlerstand im NVS: zuletzt gesicherter Stand und wann er zuletzt dem
 // aktuellen entsprach (Speichern oder Pruefung ohne Aenderung). Nur loop()-Task.
-static int32_t                   s_saved_fwd = -1, s_saved_bwd = -1;
+static ferraris_counter_state_t  s_saved;
 static uint32_t                  s_saved_ms;
 static bool                      s_saved_known;   // NVS-Stand bekannt (geladen/geschrieben)
 
@@ -286,24 +292,36 @@ static bool settings_restart_pending(void)
 
 // ─── Zaehlerstand speichern ──────────────────────────────────────────────────
 
+/** Aktueller Stand (Gesamt + Tag) zum Speichern. */
+static void counter_state(ferraris_counter_state_t *st)
+{
+    ferraris_data_get_quad(s_data, &st->forward, &st->backward);
+    st->day       = s_day;
+    st->day_valid = true;
+}
+
 /** setup(): gesicherten Stand uebernehmen (vor dem Start der Zaehlung). */
 static void counter_restore(void)
 {
+    ferraris_day_start(&s_day, 0, 0);
 #if FERRARIS_COUNTER_PERSIST_ENABLE
-    int32_t fwd = 0, bwd = 0;
-    if (!ferraris_counter_load(&fwd, &bwd)) {
+    ferraris_counter_state_t st = {};
+    if (!ferraris_counter_load(&st)) {
         printf("# Kein gespeicherter Zaehlerstand - beginne bei 0\n");
         return;
     }
-    ferraris_data_set_quad(s_data, fwd, bwd);
-    s_saved_fwd   = fwd;
-    s_saved_bwd   = bwd;
+    ferraris_data_set_quad(s_data, st.forward, st.backward);
+    // Altes Format ohne Tageswerte: der Tag beginnt beim geladenen Stand.
+    if (st.day_valid) s_day = st.day;
+    else ferraris_day_start(&s_day, st.forward, st.backward);
+    s_saved       = st;
     s_saved_ms    = millis();
-    s_saved_known = true;
+    s_saved_known = st.day_valid;
     // Immer sichtbar (auch im CSV-Modus), als '#'-Kommentarzeile.
     printf("# Zaehlerstand geladen: Bezug %.3f kWh, Einspeisung %.3f kWh (%ld/%ld Schritte)\n",
-           (double)ferraris_data_get_import_kwh(s_data), (double)ferraris_data_get_export_kwh(s_data),
-           (long)fwd, (long)bwd);
+           ferraris_data_steps_to_kwh(s_boot.revs_per_kwh, st.forward),
+           ferraris_data_steps_to_kwh(s_boot.revs_per_kwh, st.backward),
+           (long)st.forward, (long)st.backward);
 #endif
 }
 
@@ -315,15 +333,15 @@ static bool counter_save(void)
 {
 #if FERRARIS_COUNTER_PERSIST_ENABLE
     if (!s_data) return false;
-    int32_t fwd, bwd;
-    ferraris_data_get_quad(s_data, &fwd, &bwd);
-    if (!s_saved_known || fwd != s_saved_fwd || bwd != s_saved_bwd) {
-        if (!ferraris_counter_save(fwd, bwd)) {
+    ferraris_counter_state_t cur;
+    counter_state(&cur);
+    if (!s_saved_known || cur.forward != s_saved.forward || cur.backward != s_saved.backward ||
+        memcmp(&cur.day, &s_saved.day, sizeof(cur.day)) != 0) {
+        if (!ferraris_counter_save(&cur)) {
             FLOGE(TAG, "Zaehlerstand konnte nicht gespeichert werden (NVS)");
             return false;
         }
-        s_saved_fwd   = fwd;
-        s_saved_bwd   = bwd;
+        s_saved       = cur;
         s_saved_known = true;
     }
     s_saved_ms = millis();   // gesicherter Stand ist (wieder) aktuell
@@ -342,6 +360,30 @@ static void counter_loop(void)
 #endif
 }
 
+/** loop(): einmal je Sekunde das Datum pruefen; Tageswechsel sofort sichern. */
+static void day_loop(void)
+{
+    static uint32_t last_ms;
+    if (!s_data || millis() - last_ms < 1000) return;
+    last_ms = millis();
+    const time_t now = time(nullptr);
+    if (now < 1700000000) return;            // noch keine Uhrzeit (NTP)
+    struct tm tm;
+    localtime_r(&now, &tm);
+    const int32_t today = ferraris_day_id(tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday);
+    const int32_t before = s_day.day_id;
+    int32_t fwd, bwd;
+    ferraris_data_get_quad(s_data, &fwd, &bwd);
+    if (!ferraris_day_update(&s_day, today, fwd, bwd)) return;
+    if (before) {
+        const int32_t k = ferraris_data_get_revs_per_kwh(s_data);
+        printf("# Tageswechsel: %ld Bezug %.3f kWh, Einspeisung %.3f kWh\n", (long)s_day.prev_id,
+               ferraris_data_steps_to_kwh(k, s_day.prev_fwd),
+               ferraris_data_steps_to_kwh(k, s_day.prev_bwd));
+    }
+    counter_save();
+}
+
 /** ferraris_sysmon: vor Neustart (Webseite, Firmware-Update, Rollback). */
 static void counter_before_restart(void)
 {
@@ -355,14 +397,28 @@ static void counter_before_restart(void)
 #endif
 }
 
-#if FERRARIS_WIFI_ENABLE   // zurueckgesetzt wird nur ueber die Webseite
-static bool counter_reset(const char **why)
+#if FERRARIS_WIFI_ENABLE   // gesetzt wird nur ueber die Webseite
+/** Zaehlerstand auf den echten Stand setzen (0/0 = zuruecksetzen). Tageswerte bleiben. */
+static bool counter_set(double import_kwh, double export_kwh, const char **why)
 {
+    static char msg[96];
     if (!s_data) { *why = "Zaehler nicht initialisiert"; return false; }
-    ferraris_data_set_quad(s_data, 0, 0);
+    const int32_t k = ferraris_data_get_revs_per_kwh(s_data);
+    int32_t new_fwd, new_bwd;
+    if (!ferraris_data_kwh_to_steps(k, import_kwh, &new_fwd) ||
+        !ferraris_data_kwh_to_steps(k, export_kwh, &new_bwd)) {
+        snprintf(msg, sizeof(msg), "Wert zu gross (hoechstens %.0f kWh bei k = %ld)",
+                 ferraris_data_steps_to_kwh(k, (int32_t)FERRARIS_DATA_MAX_SET_STEPS), (long)k);
+        *why = msg;
+        return false;
+    }
+    int32_t old_fwd, old_bwd;
+    ferraris_data_get_quad(s_data, &old_fwd, &old_bwd);
+    ferraris_data_set_quad(s_data, new_fwd, new_bwd);
+    ferraris_day_shift(&s_day, new_fwd - old_fwd, new_bwd - old_bwd);
 #if FERRARIS_COUNTER_PERSIST_ENABLE
     if (!counter_save()) {
-        *why = "Zurueckgesetzt, aber Speichern im NVS fehlgeschlagen";
+        *why = "Gesetzt, aber Speichern im NVS fehlgeschlagen";
         return false;
     }
 #endif
@@ -605,11 +661,16 @@ static void print_task(void *arg)
         ferraris_data_get_quad(s_data, &fwd, &bwd);
         if (fwd != last_fwd || bwd != last_bwd) {
             float watts = ferraris_data_get_power_watts(s_data, (uint32_t)(esp_timer_get_time() / 1000));
+            int32_t day_fwd, day_bwd;
+            ferraris_day_get(&s_day, fwd, bwd, &day_fwd, &day_bwd);
+            const int32_t k = ferraris_data_get_revs_per_kwh(s_data);
             printf("Zaehler: Verbrauch=%ld  Einspeisung=%ld  Netto=%ld  "
-                   "(delta_fwd=%ld delta_bwd=%ld)  %.4f kWh  %.0f W\n",
+                   "(delta_fwd=%ld delta_bwd=%ld)  %.4f kWh  %.0f W  "
+                   "Tagesbezug %.3f kWh  Tageslieferung %.3f kWh\n",
                    (long)fwd, (long)bwd, (long)(fwd - bwd),
                    (long)(fwd - last_fwd), (long)(bwd - last_bwd),
-                   (double)ferraris_data_get_energy_kwh(s_data), (double)watts);
+                   ferraris_data_steps_to_kwh(k, fwd - bwd), (double)watts,
+                   ferraris_data_steps_to_kwh(k, day_fwd), ferraris_data_steps_to_kwh(k, day_bwd));
             last_fwd = fwd;
             last_bwd = bwd;
         }
@@ -626,9 +687,18 @@ static void fill_status(ferraris_status_t *st)
     st->counting       = s_counting;
     st->revs_per_kwh   = ferraris_data_get_revs_per_kwh(s_data);
     ferraris_data_get_quad(s_data, &st->steps_import, &st->steps_export);
-    st->import_kwh     = ferraris_data_get_import_kwh(s_data);
-    st->export_kwh     = ferraris_data_get_export_kwh(s_data);
-    st->net_kwh        = ferraris_data_get_energy_kwh(s_data);
+    const int32_t k    = st->revs_per_kwh;
+    st->import_kwh     = ferraris_data_steps_to_kwh(k, st->steps_import);
+    st->export_kwh     = ferraris_data_steps_to_kwh(k, st->steps_export);
+    st->net_kwh        = ferraris_data_steps_to_kwh(k, st->steps_import - st->steps_export);
+    int32_t day_fwd, day_bwd;
+    ferraris_day_get(&s_day, st->steps_import, st->steps_export, &day_fwd, &day_bwd);
+    st->day_id          = s_day.day_id;
+    st->day_import_kwh  = ferraris_data_steps_to_kwh(k, day_fwd);
+    st->day_export_kwh  = ferraris_data_steps_to_kwh(k, day_bwd);
+    st->prev_day_id     = s_day.prev_id;
+    st->prev_import_kwh = ferraris_data_steps_to_kwh(k, s_day.prev_fwd);
+    st->prev_export_kwh = ferraris_data_steps_to_kwh(k, s_day.prev_bwd);
     st->power_w        = ferraris_data_get_power_watts(s_data, now);
     st->saved_age_s    = s_saved_known ? (int32_t)((millis() - s_saved_ms) / 1000) : -1;
     st->threshold_high = s_logic_a.threshold_high;
@@ -728,8 +798,10 @@ static void print_boot_config(void)
 #if FERRARIS_WIFI_ENABLE
     FLOGI(TAG, "WLAN    : Host %s, Einrichtungs-AP %sXXXX, MQTT %s", s_boot.hostname,
           FERRARIS_AP_SSID_PREFIX, s_boot.mqtt_uri[0] ? s_boot.mqtt_uri : "aus");
+    FLOGI(TAG, "Uhrzeit : NTP %s, TZ %s (Tageswerte ab 0:00 Uhr)", FERRARIS_NTP_SERVER, FERRARIS_TIMEZONE);
 #else
     FLOGI(TAG, "WLAN    : aus");
+    FLOGI(TAG, "Uhrzeit : keine (ohne WLAN) - Tageswerte zaehlen ab dem Start");
 #endif
 }
 
@@ -809,6 +881,9 @@ void setup()
         FLOGE(TAG, "Kein Speicher fuer Zaehler/Decoder/Logger - Abbruch");
         return;
     }
+    // Zeitzone schon jetzt: die Tageswerte nutzen localtime(), NTP kommt spaeter.
+    setenv("TZ", FERRARIS_TIMEZONE, 1);
+    tzset();
     counter_restore();
 
     adc_channel_t sensor_ch[MAX_SENSORS];
@@ -856,6 +931,8 @@ void setup()
         .sta_lost_to_ap_ms      = FERRARIS_STA_LOST_TO_AP_MS,
         .ap_retry_interval_ms   = FERRARIS_AP_RETRY_INTERVAL_MS,
         .ap_off_delay_ms        = FERRARIS_AP_OFF_DELAY_MS,
+        .ntp_server             = FERRARIS_NTP_SERVER,
+        .timezone               = FERRARIS_TIMEZONE,
         .mqtt_uri          = s_boot.mqtt_uri,
         .mqtt_user         = s_boot.mqtt_user,
         .mqtt_password     = s_boot.mqtt_password,
@@ -865,7 +942,7 @@ void setup()
         .console_pause_ms  = FERRARIS_CONSOLE_PAUSE_MS,
         .settings          = &settings_ops,
         .calib             = &calib_ops,
-        .counter_reset_fn  = counter_reset,
+        .counter_set_fn    = counter_set,
         .counter_persist   = FERRARIS_COUNTER_PERSIST_ENABLE != 0,
     };
     ferraris_net_begin(&net_cfg, fill_status, csv_row);
@@ -920,6 +997,7 @@ void loop()
     adc_watchdog();
     calib_loop();
     counter_loop();
+    day_loop();
 #if FERRARIS_WIFI_ENABLE
     ferraris_net_loop();
     const bool net_ok = ferraris_net_healthy();

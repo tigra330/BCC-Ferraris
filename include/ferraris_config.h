@@ -160,6 +160,19 @@
 #define FERRARIS_COUNTER_SAVE_INTERVAL_MS (5UL * 60UL * 1000UL)
 #endif
 
+// ─── Uhrzeit fuer die Tageswerte (Tagesbezug/-einspeisung) ──────────────────
+
+/** NTP-Server; die Uhrzeit kommt nur ueber das Heim-WLAN. Ohne Uhrzeit
+ *  laufen die Tageswerte ab dem Start weiter, bis die Zeit bekannt ist. */
+#ifndef FERRARIS_NTP_SERVER
+#define FERRARIS_NTP_SERVER "pool.ntp.org"
+#endif
+/** Zeitzone (POSIX-TZ) fuer den Tageswechsel um 0:00 Uhr. Default:
+ *  Mitteleuropa mit Sommerzeit (letzter So. im Maerz / Oktober). */
+#ifndef FERRARIS_TIMEZONE
+#define FERRARIS_TIMEZONE "CET-1CEST,M3.5.0,M10.5.0/3"
+#endif
+
 // ─── Robustheit (ferraris_sysmon) ────────────────────────────────────────────
 
 /** loop() (WLAN, HTTP, MQTT) haengt so lange -> Neustart. Weit ueber dem

@@ -3,12 +3,14 @@
  * @brief Unit-Tests der pure-C-Logik (pio test -e native).
  */
 
+#include <math.h>
 #include <string.h>
 #include <unity.h>
 
 #include "autotune_collector.h"
 #include "ferraris_calib.h"
 #include "ferraris_data.h"
+#include "ferraris_day.h"
 #include "ferraris_health.h"
 #include "ferraris_hwcheck.h"
 #include "ferraris_logger_logic.h"
@@ -19,6 +21,9 @@
 #include "quadrature_decoder.h"
 #include "schmitt_trigger_autotune.h"
 #include "schmitt_trigger_logic.h"
+
+// Unity ist ohne Double-Unterstuetzung gebaut.
+#define ASSERT_DOUBLE(exp, act) TEST_ASSERT_TRUE(fabs((double)(exp) - (double)(act)) < 1e-9)
 
 void setUp(void) {}
 void tearDown(void) {}
@@ -270,6 +275,74 @@ static void test_data_set_quad(void)
     ferraris_data_destroy(d);
 }
 
+static void test_data_kwh_steps(void)
+{
+    int32_t st = -1;
+    TEST_ASSERT_TRUE(ferraris_data_kwh_to_steps(150, 12345.6, &st));
+    TEST_ASSERT_EQUAL(7407360, st);                       // 12345,6 * 600
+    TEST_ASSERT_TRUE(ferraris_data_kwh_to_steps(150, 0.0, &st));
+    TEST_ASSERT_EQUAL(0, st);
+    TEST_ASSERT_TRUE(ferraris_data_kwh_to_steps(75, 0.0019, &st));
+    TEST_ASSERT_EQUAL(1, st);                             // 0,57 Schritte -> gerundet
+    TEST_ASSERT_FALSE(ferraris_data_kwh_to_steps(150, -1.0, &st));
+    TEST_ASSERT_FALSE(ferraris_data_kwh_to_steps(0, 1.0, &st));
+    TEST_ASSERT_FALSE(ferraris_data_kwh_to_steps(10000, 30000.0, &st));   // > 1e9 Schritte
+    TEST_ASSERT_TRUE(ferraris_data_kwh_to_steps(150, 1.0e6, &st));
+    ASSERT_DOUBLE(12345.6, ferraris_data_steps_to_kwh(150, 7407360));
+    ASSERT_DOUBLE(0.0, ferraris_data_steps_to_kwh(0, 100));
+}
+
+// ─── Tageswerte ──────────────────────────────────────────────────────────────
+
+static void test_day_rollover(void)
+{
+    ferraris_day_t d;
+    int32_t f, b;
+    TEST_ASSERT_EQUAL(20261018, ferraris_day_id(2026, 10, 18));
+
+    // Start ohne Uhrzeit: zaehlt ab dem geladenen Stand.
+    ferraris_day_start(&d, 1000, 50);
+    TEST_ASSERT_FALSE(ferraris_day_update(&d, 0, 1100, 50));   // Uhrzeit unbekannt
+    ferraris_day_get(&d, 1100, 60, &f, &b);
+    TEST_ASSERT_EQUAL(100, f);
+    TEST_ASSERT_EQUAL(10, b);
+
+    // Erste Uhrzeit: bisher Gezaehltes gehoert zum heutigen Tag, kein Vortag.
+    TEST_ASSERT_TRUE(ferraris_day_update(&d, 20261018, 1100, 60));
+    TEST_ASSERT_EQUAL(20261018, d.day_id);
+    TEST_ASSERT_EQUAL(0, d.prev_id);
+    ferraris_day_get(&d, 1200, 60, &f, &b);
+    TEST_ASSERT_EQUAL(200, f);
+    TEST_ASSERT_FALSE(ferraris_day_update(&d, 20261018, 1200, 60));   // gleicher Tag
+
+    // Mitternacht: Tag abschliessen, neuer Tag beginnt bei 0.
+    TEST_ASSERT_TRUE(ferraris_day_update(&d, 20261019, 1600, 70));
+    TEST_ASSERT_EQUAL(20261018, d.prev_id);
+    TEST_ASSERT_EQUAL(600, d.prev_fwd);
+    TEST_ASSERT_EQUAL(20, d.prev_bwd);
+    ferraris_day_get(&d, 1600, 70, &f, &b);
+    TEST_ASSERT_EQUAL(0, f);
+    TEST_ASSERT_EQUAL(0, b);
+
+    // Zaehlerstand eingegeben: Tageswert bleibt.
+    ferraris_day_get(&d, 1650, 70, &f, &b);
+    TEST_ASSERT_EQUAL(50, f);
+    ferraris_day_shift(&d, 7407360 - 1650, 0 - 70);
+    ferraris_day_get(&d, 7407360, 0, &f, &b);
+    TEST_ASSERT_EQUAL(50, f);
+    TEST_ASSERT_EQUAL(0, b);
+
+    // Nach mehreren Tagen Pause: letzter Tag wird Vortag.
+    TEST_ASSERT_TRUE(ferraris_day_update(&d, 20261023, 7407370, 0));
+    TEST_ASSERT_EQUAL(20261019, d.prev_id);
+    TEST_ASSERT_EQUAL(60, d.prev_fwd);
+
+    // Nie negativ (z. B. nach Zuruecksetzen ohne shift).
+    ferraris_day_get(&d, 0, 0, &f, &b);
+    TEST_ASSERT_EQUAL(0, f);
+    TEST_ASSERT_EQUAL(0, b);
+}
+
 // ─── HW-Klassifikation ───────────────────────────────────────────────────────
 
 static void test_hw_classify(void)
@@ -307,6 +380,9 @@ static void test_status_json(void)
     st.net_kwh = 0.0133f;
     st.power_w = -412.34f;
     st.saved_age_s = 42;
+    st.day_id = 20261018;
+    st.day_import_kwh = 1.5;
+    st.prev_day_id = 0;
     st.threshold_high = 3450;
     st.threshold_low = 3300;
     st.count_a = "Q1";
@@ -341,6 +417,8 @@ static void test_status_json(void)
     TEST_ASSERT_GREATER_THAN(0, n);
     TEST_ASSERT_EQUAL((int)strlen(buf), n);
     TEST_ASSERT_NOT_NULL(strstr(buf, "\"power_w\":-412.3,\"saved_s\":42}"));
+    TEST_ASSERT_NOT_NULL(strstr(buf, "\"day\":\"2026-10-18\",\"day_import_kwh\":1.5000,"
+                                     "\"day_export_kwh\":0.0000,\"prev_day\":null,"));
     TEST_ASSERT_NOT_NULL(strstr(buf, "\"count_pair\":[\"Q1\",\"Q2\"]"));
     TEST_ASSERT_NOT_NULL(strstr(buf, "\"name\":\"Q\\\"1\""));   // Escape
     TEST_ASSERT_NOT_NULL(strstr(buf, "\"hw\":\"OK\",\"high\":2900,\"low\":2700}"));
@@ -361,6 +439,29 @@ static void test_status_json(void)
 }
 
 // ─── Netz-Hilfen ─────────────────────────────────────────────────────────────
+
+static void test_parse_decimal(void)
+{
+    double v = -1.0;
+    TEST_ASSERT_TRUE(ferraris_parse_decimal("12345,6", &v));
+    ASSERT_DOUBLE(12345.6, v);
+    TEST_ASSERT_TRUE(ferraris_parse_decimal(" 812.25 ", &v));
+    ASSERT_DOUBLE(812.25, v);
+    TEST_ASSERT_TRUE(ferraris_parse_decimal("0", &v));
+    ASSERT_DOUBLE(0.0, v);
+    TEST_ASSERT_TRUE(ferraris_parse_decimal("7,", &v));
+    ASSERT_DOUBLE(7.0, v);
+    TEST_ASSERT_TRUE(ferraris_parse_decimal(",5", &v));
+    ASSERT_DOUBLE(0.5, v);
+    TEST_ASSERT_FALSE(ferraris_parse_decimal("", &v));
+    TEST_ASSERT_FALSE(ferraris_parse_decimal("  ", &v));
+    TEST_ASSERT_FALSE(ferraris_parse_decimal(",", &v));
+    TEST_ASSERT_FALSE(ferraris_parse_decimal("-5", &v));
+    TEST_ASSERT_FALSE(ferraris_parse_decimal("12.345,6", &v));   // Tausenderpunkt
+    TEST_ASSERT_FALSE(ferraris_parse_decimal("12 345", &v));
+    TEST_ASSERT_FALSE(ferraris_parse_decimal("1e5", &v));
+    TEST_ASSERT_FALSE(ferraris_parse_decimal(NULL, &v));
+}
 
 static void test_wifi_credentials(void)
 {
@@ -770,9 +871,12 @@ int main(void)
     RUN_TEST(test_power_timer_wrap);
     RUN_TEST(test_data_energy);
     RUN_TEST(test_data_set_quad);
+    RUN_TEST(test_data_kwh_steps);
+    RUN_TEST(test_day_rollover);
     RUN_TEST(test_hw_classify);
     RUN_TEST(test_status_json);
     RUN_TEST(test_wifi_credentials);
+    RUN_TEST(test_parse_decimal);
     RUN_TEST(test_json_string);
     RUN_TEST(test_settings_set_field);
     RUN_TEST(test_settings_validate);

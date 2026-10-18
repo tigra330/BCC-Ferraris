@@ -4,6 +4,7 @@
  */
 
 #include "ferraris_netutil.h"
+#include <ctype.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -46,3 +47,28 @@ int ferraris_json_string(char *buf, size_t len, const char *s)
     return (int)pos;
 }
 
+
+bool ferraris_parse_decimal(const char *s, double *out)
+{
+    if (!s) return false;
+    while (isspace((unsigned char)*s)) s++;
+    double v = 0.0, scale = 0.0;   // scale > 0: Nachkommastellen
+    int digits = 0;
+    bool sep = false;
+    for (; *s && !isspace((unsigned char)*s); s++) {
+        if (*s >= '0' && *s <= '9') {
+            if (sep) { scale /= 10.0; v += (*s - '0') * scale; }
+            else     v = v * 10.0 + (*s - '0');
+            if (++digits > 15) return false;     // jenseits double-Genauigkeit
+        } else if ((*s == ',' || *s == '.') && !sep) {
+            sep = true;
+            scale = 1.0;
+        } else {
+            return false;
+        }
+    }
+    while (isspace((unsigned char)*s)) s++;
+    if (*s || digits == 0) return false;
+    if (out) *out = v;
+    return true;
+}

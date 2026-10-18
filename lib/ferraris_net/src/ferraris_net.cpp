@@ -154,6 +154,16 @@ static void mdns_start()
     }
 }
 
+/** Uhrzeit per NTP (einmal starten, SNTP synchronisiert danach selbst nach). */
+static void ntp_start()
+{
+    static bool started;
+    if (started || !s_cfg.ntp_server || !s_cfg.ntp_server[0]) return;
+    started = true;
+    configTzTime(s_cfg.timezone ? s_cfg.timezone : "UTC0", s_cfg.ntp_server);
+    FLOGI(TAG, "NTP: %s", s_cfg.ntp_server);
+}
+
 static void ap_start()
 {
     if (s_ap_on) return;
@@ -623,11 +633,32 @@ static void handle_counter_reset()
 {
     if (!admin_write_ok()) return;
     const char *why = nullptr;
-    if (!s_cfg.counter_reset_fn(&why)) {
+    if (!s_cfg.counter_set_fn(0.0, 0.0, &why)) {
         config_error(500, why ? why : "Zuruecksetzen fehlgeschlagen", nullptr);
         return;
     }
     console_note("Zaehlerstand auf 0 gesetzt (Webseite)");
+    send_json(200, "{\"ok\":true}");
+}
+
+static void handle_counter_set()
+{
+    if (!admin_write_ok()) return;
+    double imp_kwh = 0.0, exp_kwh = 0.0;
+    if (!ferraris_parse_decimal(s_server->arg("import_kwh").c_str(), &imp_kwh)) {
+        config_error(400, "Bezug: bitte eine Zahl >= 0 eingeben (z. B. 12345,6)", "import_kwh");
+        return;
+    }
+    if (!ferraris_parse_decimal(s_server->arg("export_kwh").c_str(), &exp_kwh)) {
+        config_error(400, "Einspeisung: bitte eine Zahl >= 0 eingeben (z. B. 0 oder 812,3)", "export_kwh");
+        return;
+    }
+    const char *why = nullptr;
+    if (!s_cfg.counter_set_fn(imp_kwh, exp_kwh, &why)) {
+        config_error(400, why ? why : "Setzen fehlgeschlagen", nullptr);
+        return;
+    }
+    console_note("Zaehlerstand gesetzt (Webseite): Bezug %.3f kWh, Einspeisung %.3f kWh", imp_kwh, exp_kwh);
     send_json(200, "{\"ok\":true}");
 }
 
@@ -831,6 +862,7 @@ static void wifi_step()
                          s_sta_ssid, ip.c_str(), WiFi.RSSI(), ip.c_str(), s_cfg.hostname);
             console_pause();
             mdns_start();
+            ntp_start();
             mqtt_start();
         }
         if (s_ap_on && now - s_connected_ms > s_cfg.ap_off_delay_ms && ap_clients() == 0) {
@@ -901,8 +933,9 @@ void ferraris_net_begin(const ferraris_net_config_t *cfg,
         s_server->on("/api/config", HTTP_GET, handle_config_get);
         s_server->on("/api/config", HTTP_POST, handle_config_save);
         s_server->on("/api/restart", HTTP_POST, handle_restart);
-        if (s_cfg.counter_reset_fn) {
+        if (s_cfg.counter_set_fn) {
             s_server->on("/api/counter/reset", HTTP_POST, handle_counter_reset);
+            s_server->on("/api/counter/set", HTTP_POST, handle_counter_set);
         }
         s_server->on("/api/ota", HTTP_POST, handle_ota_done, handle_ota_upload);
         s_server->on("/api/coredump", HTTP_GET, handle_coredump_get);

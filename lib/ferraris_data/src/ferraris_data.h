@@ -72,6 +72,19 @@ float ferraris_data_get_power_watts(const ferraris_data_t *data, uint32_t now_ms
 
 int32_t ferraris_data_get_revs_per_kwh(const ferraris_data_t *data);
 
+/** Hoechster Stand, der gesetzt werden darf (Rest bis INT32_MAX = Reserve zum Weiterzaehlen). */
+#define FERRARIS_DATA_MAX_SET_STEPS 1000000000L
+
+/**
+ * @brief kWh (z. B. eingegebener Zaehlerstand) in Quadratur-Schritte umrechnen,
+ *        gerundet auf den naechsten Schritt (1 Schritt = 1/(4k) kWh).
+ * @return false bei k <= 0, kWh < 0 oder mehr als FERRARIS_DATA_MAX_SET_STEPS
+ */
+bool ferraris_data_kwh_to_steps(int32_t revolutions_per_kwh, double kwh, int32_t *steps);
+
+/** Schritte -> kWh in double (Anzeige grosser Zaehlerstaende ohne float-Rundung). */
+double ferraris_data_steps_to_kwh(int32_t revolutions_per_kwh, int32_t steps);
+
 /**
  * @brief Zaehlerkonstante zur Laufzeit aendern (Webseite /config).
  *

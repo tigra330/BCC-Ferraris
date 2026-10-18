@@ -8,7 +8,10 @@
  * JSON (Beispiel, eine Zeile):
  *   {"uptime_s":12,"counting":true,
  *    "meter":{"k":150,"steps_import":8,"steps_export":0,"import_kwh":0.0133,
- *             "export_kwh":0.0000,"net_kwh":0.0133,"power_w":412.3,"saved_s":42},
+ *             "export_kwh":0.0000,"net_kwh":0.0133,
+ *             "day":"2026-10-18","day_import_kwh":0.0133,"day_export_kwh":0.0000,
+ *             "prev_day":"2026-10-17","prev_import_kwh":3.2100,"prev_export_kwh":0.0000,
+ *             "power_w":412.3,"saved_s":42},
  *    "schmitt":{"high":3450,"low":3300},"count_pair":["Q1","Q2"],
  *    "sensors":[{"name":"Q1","gpio":36,"raw":2790,"min":2601,"max":3690,"hw":"OK",
  *                "high":3450,"low":3300},...],
@@ -19,6 +22,11 @@
  *              "heap_free":154000,"heap_min":121000,"heap_block":98000,
  *              "wifi_reconnects":1,"mqtt":"aus","coredump":false,"ota":"ok"},
  *    "fw":"2.1.0","host":"ferraris"}
+ *
+ * import/export/net_kwh = Gesamtstand (bleibt erhalten, auf den echten
+ * Zaehlerstand setzbar). day_* = seit 0:00 Uhr lokal, prev_* = letzter
+ * abgeschlossener Tag. "day"/"prev_day" sind null, solange keine Uhrzeit
+ * bekannt ist bzw. noch kein Tag abgeschlossen wurde.
  */
 
 #ifndef FERRARIS_STATUS_H
@@ -35,7 +43,7 @@ extern "C" {
 #define FERRARIS_STATUS_MAX_SENSORS 8
 
 /** Puffergroesse, die fuer das JSON sicher reicht. */
-#define FERRARIS_STATUS_JSON_MAX 2048   /* 8 Sensoren, lange SSID, Health-Block */
+#define FERRARIS_STATUS_JSON_MAX 2560   /* 8 Sensoren, lange SSID, Health-Block, Tageswerte (Worst Case ~2200) */
 
 typedef struct {
     const char *name;      /**< "Q1".. */
@@ -55,9 +63,15 @@ typedef struct {
     int32_t  revs_per_kwh;
     int32_t  steps_import;          /**< Quadratur-Schritte Bezug */
     int32_t  steps_export;          /**< Quadratur-Schritte Einspeisung */
-    float    import_kwh;
-    float    export_kwh;
-    float    net_kwh;
+    double   import_kwh;            /**< Gesamtstand (double: float reicht bei 5-stelligen kWh nicht) */
+    double   export_kwh;
+    double   net_kwh;
+    int32_t  day_id;                /**< laufender Tag JJJJMMTT, 0 = Uhrzeit unbekannt */
+    double   day_import_kwh;        /**< seit Tagesbeginn */
+    double   day_export_kwh;
+    int32_t  prev_day_id;           /**< Vortag JJJJMMTT, 0 = noch keiner */
+    double   prev_import_kwh;
+    double   prev_export_kwh;
     float    power_w;               /**< + Bezug, - Einspeisung */
     int32_t  saved_age_s;           /**< Zaehlerstand zuletzt gespeichert vor s, -1 = noch nie */
 

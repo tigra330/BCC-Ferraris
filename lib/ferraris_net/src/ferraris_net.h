@@ -32,6 +32,8 @@
  *   POST /api/config    Formularfelder wie ferraris_settings_set_field   (*)(**)
  *   POST /api/restart   Neustart nach ~0,5 s (Zaehlerstand wird gesichert) (*)(**)
  *   POST /api/counter/reset  Zaehlerstand auf 0 setzen und speichern      (*)(**)
+ *   POST /api/counter/set    import_kwh, export_kwh (Komma oder Punkt): Zaehlerstand
+ *                       setzen und speichern, Tageswerte bleiben           (*)(**)
  *   POST /api/ota       Firmware-Update: multipart, Feld "firmware" = firmware.bin;
  *                       schreibt in den freien OTA-Slot, dann Neustart     (*)(**)
  *   GET  /api/coredump  Absturzbericht (Rohformat) herunterladen          (*)
@@ -93,6 +95,9 @@ typedef struct {
     uint32_t    ap_retry_interval_ms;
     uint32_t    ap_off_delay_ms;
 
+    const char *ntp_server;          /**< Uhrzeit fuer die Tageswerte, "" = kein NTP */
+    const char *timezone;            /**< POSIX-TZ, z. B. "CET-1CEST,M3.5.0,M10.5.0/3" */
+
     const char *mqtt_uri;            /**< "" = kein MQTT */
     const char *mqtt_user;           /**< "" = ohne Anmeldung */
     const char *mqtt_password;
@@ -108,9 +113,9 @@ typedef struct {
     const ferraris_settings_ops_t *settings;
     /** Optional: automatisches Einmessen (NULL = aus). */
     const ferraris_calib_ops_t    *calib;
-    /** Optional: Zaehlerstand zuruecksetzen (NULL = Endpunkt aus).
-     *  why: Fehlermeldung bei false. */
-    bool      (*counter_reset_fn)(const char **why);
+    /** Optional: Zaehlerstand in kWh setzen, (0, 0) = zuruecksetzen
+     *  (NULL = Endpunkte aus). why: Fehlermeldung bei false. */
+    bool      (*counter_set_fn)(double import_kwh, double export_kwh, const char **why);
     bool        counter_persist;     /**< Zaehlerstand wird im NVS gesichert (nur Anzeige) */
 } ferraris_net_config_t;
 

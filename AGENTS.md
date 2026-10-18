@@ -65,7 +65,7 @@ Zeiten: `FERRARIS_OTA_VERIFY_MIN/STABLE/TIMEOUT_MS`. Ein USB-Upload (boot_app0) 
   (30 s) keinen Herzschlag liefert. Lange Blocker müssen `ferraris_sysmon_feed()` rufen
   (OTA-Upload, Coredump-Download). Der Task-WDT des Cores überwacht nur Idle CPU0.
 - **Zählerstand sichern**: `counter_loop()` speichert alle `FERRARIS_COUNTER_SAVE_INTERVAL_MS`
-  (5 min), aber nur bei Änderung; `before_restart`-Hook in `ferraris_sysmon_config_t` sichert vor
+  (5 min), aber nur bei Änderung (Gesamtstand **und** Tageswerte, Blob v2; v1 wird noch gelesen); `before_restart`-Hook in `ferraris_sysmon_config_t` sichert vor
   Webseiten-/OTA-Neustart und Rollback (nicht beim Loop-Watchdog: loop() hängt evtl. in einem
   Flash-Zugriff → NVS-Sperre). Ein- und Ausschalten per `FERRARIS_COUNTER_PERSIST_ENABLE`.
 - Coredump (ELF im Flash): Existenz beim Start gecacht, Zusammenfassung (Task, PC, Panic-Grund)
@@ -89,6 +89,9 @@ Task-WDT 5 s mit Panic (nur Idle-Task CPU0), `CONFIG_LOG_MAXIMUM_LEVEL=ERROR` (�
 
 - **`include/ferraris_config.h`** ersetzt Kconfig. Alle Werte `#ifndef`-geschützt, überschreibbar per
   `build_flags = -DNAME=wert`. Schalter sind `0/1`-Makros (`#if`, nicht `#ifdef`).
+- **Uhrzeit** (nur für die Tageswerte): `FERRARIS_NTP_SERVER` (`pool.ntp.org`), `FERRARIS_TIMEZONE`
+  (POSIX-TZ, Default Mitteleuropa). `TZ` wird in `setup()` gesetzt, `configTzTime()` beim ersten
+  WLAN-Connect in `ferraris_net` (vorher ist lwIP nicht sicher bereit). Ohne WLAN keine Uhrzeit.
 - **WLAN-Zugangsdaten** werden über die Webseite `/wifi` gesetzt und im NVS gespeichert
   (Namespace `ferrnet`, Keys `ssid`/`pass`). Nur wenn dort nichts steht, gelten
   `FERRARIS_WIFI_SSID/PASSWORD` aus **`include/secrets.h`** (gitignored, Vorlage `secrets.example.h`).
@@ -150,7 +153,8 @@ ferraris_data ──► print_task (Text) | log_task (CSV) | loop(): HTTP + MQTT
    `s_counting = true`; `print_task` (nur ohne CSV-Log).
 8. Bei CSV-Log: Log-Level auf ERROR (`ferraris_log` und `esp_log`), `log_task` starten.
 
-`loop()` ruft `adc_watchdog()`, `calib_loop()`, `counter_loop()`, `ferraris_net_loop()` und `ferraris_sysmon_loop(gesund)`, dann
+`loop()` ruft `adc_watchdog()`, `calib_loop()`, `counter_loop()`, `day_loop()` (1×/s Datum prüfen,
+Tageswechsel sofort sichern, Konsole `# Tageswechsel: …`), `ferraris_net_loop()` und `ferraris_sysmon_loop(gesund)`, dann
 `delay(5)` (beim ersten Durchlauf `ferraris_sysmon_start()`). Die **ADC-Überwachung**
 misst die Sample-Sets/s (Status-JSON `adc.sets_per_s`, Webseiten-Fußzeile) und startet den Sampler
 neu, wenn `FERRARIS_ADC_STALL_MS` (3 s) lang keine Sets kommen (Meldung `# ADC-Abtastung liefert
@@ -173,8 +177,9 @@ Grundregel: **Handle-basierte APIs** (`x_create()` / `x_destroy()`, opake Struct
 | `schmitt_logic` | pure C | `schmitt_trigger_logic` (Hysterese, `set_thresholds` erhält Zustand), `schmitt_trigger_autotune` (64-Bin-Histogramm, zwei Peaks, Schwellen im Tal), `autotune_collector` (dauerbasiert bis beide Populationen sichtbar). Unverändert. |
 | `ferraris_logger_logic` | pure C | Tracker je Kanal: EMA (α=0.12), asymmetrische Hülle (0.002 / 1e-6, Mindestspanne 300), Markenzähler; eigene Quadratur fürs W-Feld. Unverändert, identisch im Simulator. |
 | `ferraris_power` | pure C | **Neu.** Momentanleistung aus dem Abstand Schritt n ↔ n−4 (= genau eine Umdrehung, auch bei ungleichmäßigen Schritten): `P = 3.6e9 / (k · T_ms)`. Ohne neuen Schritt fällt die Anzeige als obere Schranke ab; Richtungswechsel setzt zurück. |
-| `ferraris_data` | pure C | Zähler (Single-Writer, 32-bit atomar), `import/export/energy_kwh`, `get_power_watts(now_ms)` (Timeout 1 h). `set_quad(fwd, bwd)` (Laden/Zurücksetzen, loop()-Task) setzt nur einen Basiswert — die Hotpath-Zähler bleiben unangetastet, kein Rennen mit dem DMA-Callback. Ohne Kameraziffern → jetzt PC-testbar. |
-| `ferraris_counter_store` | ESP (C++) | **Neu.** Zählerstand (Quadratur-Schritte, nicht kWh → k-Änderung rechnet um) als Blob `cnt` {version, fwd, bwd} im NVS-Namespace `ferrcnt`. In `native` per `lib_ignore`. |
+| `ferraris_data` | pure C | Zähler (Single-Writer, 32-bit atomar), `import/export/energy_kwh`, `get_power_watts(now_ms)` (Timeout 1 h). `set_quad(fwd, bwd)` (Laden/Zurücksetzen, loop()-Task) setzt nur einen Basiswert — die Hotpath-Zähler bleiben unangetastet, kein Rennen mit dem DMA-Callback. `kwh_to_steps` (Eingabe, max. 1e9 Schritte) / `steps_to_kwh` (double). Ohne Kameraziffern → jetzt PC-testbar. |
+| `ferraris_day` (in `lib/ferraris_data`) | pure C | **Neu.** Tageswerte: Gesamtschritte zu Tagesbeginn + Vortag, Tag als JJJJMMTT (lokal, NTP). `update` schliesst bei Datumswechsel den Tag ab; ohne Uhrzeit (`day_id` 0) zählt der Tag ab dem Start. `shift` hält den Tageswert, wenn der Gesamtstand gesetzt wird. Schreiber: loop()-Task. |
+| `ferraris_counter_store` | ESP (C++) | **Neu.** Zählerstand (Quadratur-Schritte, nicht kWh → k-Änderung rechnet um) + `ferraris_day_t` als Blob `cnt` v2 {version, fwd, bwd, day} im NVS-Namespace `ferrcnt` (v1 {version, fwd, bwd} wird gelesen, Tag beginnt dann beim Stand). In `native` per `lib_ignore`. |
 | `ferraris_hwcheck` | pure C | Selbsttest-Klassifikation: `ferraris_hw_classify` (GPIO32/33 mit Pulls; floating ⇒ diff > 3800, Last ⇒ diff < 1500), `ferraris_hw_classify_noise` (GPIO34..39, Spread < 120 = stabil), GPIO→ADC1-Kanal. |
 | `ferraris_status` | pure C | **Neu.** Status-Snapshot + JSON-Formatter (gemeinsam für HTTP und MQTT). |
 | `ferraris_log` | pure C | **Neu.** `FLOGE/W/I(tag, …)` mit Laufzeit-Level. Ersetzt `ESP_LOGx`, weil der Core `ESP_LOGI/W` weg-kompiliert und der CSV-Modus stummschalten muss. |
@@ -225,7 +230,14 @@ Endpunkte (`*` = aus dem Heimnetz mit HTTP-Basic-Auth `admin` / AP-Passwort, üb
 - `POST /api/restart` `*` `**` — MQTT `offline`, Neustart nach ~0,5 s (über `ferraris_sysmon_restart()`,
   sichert vorher den Zählerstand).
 - `POST /api/counter/reset` `*` `**` — Zählerstand auf 0 und sofort speichern (Karte „Zählerstand“
-  auf `/config`, mit Rückfrage). Status-JSON `meter.saved_s` = Sekunden, seit der gesicherte Stand
+  auf `/config`, mit Rückfrage). Tageswerte bleiben.
+- `POST /api/counter/set` `*` `**` — Felder `import_kwh`, `export_kwh` (Komma oder Punkt,
+  `ferraris_parse_decimal`): Gesamtstand auf den Stand am Zählwerk setzen und speichern, Tageswerte
+  bleiben (`ferraris_day_shift`). Zähler mit einem rücklaufenden Zählwerk: Stand als Bezug, 0 als Lieferung.
+- Status-JSON `meter`: `import_kwh`/`export_kwh`/`net_kwh` = **Gesamtstand**; `day` (`"JJJJ-MM-TT"`
+  oder `null` ohne Uhrzeit), `day_import_kwh`, `day_export_kwh` = seit 0:00 Uhr; `prev_day`,
+  `prev_import_kwh`, `prev_export_kwh` = letzter abgeschlossener Tag. Webseiten: „Tagesbezug“,
+  „Tageslieferung“, „Bezug/Lieferung/Netto gesamt“. Status-JSON `meter.saved_s` = Sekunden, seit der gesicherte Stand
   zuletzt aktuell war (−1 = noch nie); `/api/config` liefert `counter_persist`.
 - `GET /api/coredump` `*` — Absturzbericht roh (`esp-coredump info_corefile --core-format raw
   --core ferraris-coredump.bin .pio/build/esp32/firmware.elf`); `POST /api/coredump/delete` `*` `**`.
@@ -301,7 +313,8 @@ W, [Q1_raw, Q1_min, Q1_max, …, Qn_raw, Qn_min, Qn_max]
 
 - `test/test_logic/test_main.c` (Unity, `pio test -e native`): Quadratur, Schmitt, Auto-Tune,
   Collector, Logger-Logik, Leistung (inkl. Timer-Überlauf), Zählerdaten, HW-Klassifikation, JSON,
-  WLAN-Zugangsdaten-Prüfung, JSON-Escaping, Einstellungen (Parser, Prüfung, Neustart-Felder, JSON).
+  WLAN-Zugangsdaten-Prüfung, JSON-Escaping, Dezimal-Eingabe, Tageswerte (Wechsel, Vortag, Setzen),
+  kWh↔Schritte, Einstellungen (Parser, Prüfung, Neustart-Felder, JSON).
   Die Env `native` ignoriert die ESP-Bibliotheken per `lib_ignore` — neue ESP-Libs dort eintragen.
 - `tools/sim/ferraris_sim.c`: Standalone-Simulator, nutzt dieselben pure-C-Dateien:
 
@@ -341,7 +354,7 @@ gcc -Wall -Wextra -I../../lib/schmitt_logic/src -I../../lib/ferraris_logger_logi
 - Auf echter Hardware prüfen: DMA-Sampling + WLAN gleichzeitig (Sample-Verluste, ADC-Rauschen →
   Schwellen), HTTP/MQTT im Dauerbetrieb.
 - Zählerstand: Bei Stromausfall/Absturz fehlen bis zu `FERRARIS_COUNTER_SAVE_INTERVAL_MS` (5 min).
-  Optional: Stand auf den echten Zählerstand setzen (Eingabefeld statt nur Reset).
+  Eingegebener Stand liegt in Schritten vor → nach k-Änderung neu eingeben.
 - Sicherheit: HTTP ohne TLS, Basic-Auth im Klartext im Heimnetz; Admin-Passwort = AP-Passwort
   (ändern über `/config` oder Default per `-DFERRARIS_AP_PASSWORD=…`). Passwort vergessen → nur
   Flash löschen hilft (kein Reset-Taster-Pfad). MQTT-Passwort liegt im NVS im Klartext.

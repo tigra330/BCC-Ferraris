@@ -102,3 +102,17 @@ bool ferraris_data_set_revs_per_kwh(ferraris_data_t *data, int32_t revolutions_p
     data->revolutions_per_kwh = revolutions_per_kwh;
     return true;
 }
+
+bool ferraris_data_kwh_to_steps(int32_t revolutions_per_kwh, double kwh, int32_t *steps)
+{
+    if (revolutions_per_kwh <= 0 || !(kwh >= 0.0)) return false;   // !(>=) faengt auch NaN
+    double s = kwh * 4.0 * (double)revolutions_per_kwh + 0.5;
+    if (s > (double)FERRARIS_DATA_MAX_SET_STEPS) return false;
+    if (steps) *steps = (int32_t)s;
+    return true;
+}
+
+double ferraris_data_steps_to_kwh(int32_t revolutions_per_kwh, int32_t steps)
+{
+    return revolutions_per_kwh > 0 ? (double)steps / (4.0 * (double)revolutions_per_kwh) : 0.0;
+}
